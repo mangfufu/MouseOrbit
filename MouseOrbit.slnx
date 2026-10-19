@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MouseOrbit/MouseOrbit.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MouseOrbit.Checks/MouseOrbit.Checks.csproj" />
+  </Folder>
+</Solution>
