@@ -13,18 +13,23 @@ internal sealed class OrbitController : IDisposable
     public string LastStatus { get; private set; } = "";
     private readonly OrbitWindow _orbit = new();
     private readonly QuickPanelWindow _quick = new();
-    private readonly GestureHint _hint = new();
-    private readonly PointerTrail _trail = new();
+    private readonly GestureRenderer _graphics = new();
+    private readonly ActionToast _feedback = new();
+    private readonly PointerPath _path = new();
     private readonly TriggerPress _press = new();
     private readonly WindowCatalog _catalog = new();
+    private readonly WindowSnapshotCache _windowCache;
+    private TaskCompletionSource? _startupReady;
+    private long _nextWindowRefresh;
     private readonly CaptureTools _capture = new();
+    private readonly MouseInputBridge _inputBridge;
     private readonly GlobalInput _input;
     private readonly System.Windows.Forms.NotifyIcon _tray;
     private readonly System.Windows.Forms.ToolStripMenuItem _focusItem;
     private readonly DispatcherTimer _timer;
     private bool _wheel, _heldTrigger, _heldRight, _consumeLeftUp, _gestureCanceled;
     private bool _consumeRightUp, _disposed, _autoFocus, _lastPaused, _wheelFromHold;
-    private long _nextFocus, _nextPreview;
+    private long _nextFocus, _gestureVersion;
     private int _triggerUp, _page, _wheelDelta;
     private Native.Point _origin, _latest;
     private double _gestureScale = 1;
@@ -33,7 +38,11 @@ internal sealed class OrbitController : IDisposable
     private StrokeGesture? _gesture;
     private WindowTarget _target;
     private nint _checkedForeground;
+    private int _quickRequest, _lastGestureView = -1;
+    private bool _quickPending;
+    private bool _focusChecking;
     public nint LastTarget => _target.Handle;
+    internal bool Interacting => _heldRight || _heldTrigger || _wheel || _quick.IsVisible || _quickPending || _capture.Busy || _inputBridge.HasPending;
     public Func<Dictionary<string, IReadOnlyList<DesktopEntry>>>? QuickEntries;
     public Func<DesktopEntry, bool>? RemoveRecentEntry;
     public Func<DesktopEntry, bool>? RemoveFrequentEntry;
@@ -41,9 +50,13 @@ internal sealed class OrbitController : IDisposable
     public event Action? QuickOpened;
     public OrbitController()
     {
+        _windowCache = new WindowSnapshotCache(() => _catalog.Read(0), groups => ShellIcons.PreloadAsync(groups.SelectMany(g => g.Windows).Select(w => w.Icon)));
         Palette.Apply(ThemePresets.Find(Settings.Theme, Settings.DarkTheme).Id);
         _target = WindowTarget.Capture(Native.GetForegroundWindow());
-        _input = new GlobalInput { Mouse = OnMouse };
+        Native.GetCursorPos(out _latest);
+        _inputBridge = new MouseInputBridge(() => Application.Current.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(DrainInput)), _latest);
+        _quick.OpenStateChanged += PublishInputContext;
+        _orbit.IsVisibleChanged += (_, _) => PublishInputContext();
         _quick.Selected += entry => _ = ExecuteEntry(entry);
         _quick.Manage += OpenSettings;
         _quick.ToolRequested += id => _ = Tool(id);
@@ -66,25 +79,47 @@ internal sealed class OrbitController : IDisposable
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
         _timer.Tick += (_, _) => Tick(); _timer.Start();
         if (Preferences.LoadWarning != null) LastStatus = Preferences.LoadWarning;
+        PublishInputContext();
+        _input = new GlobalInput(_inputBridge.Handle);
+        _graphics.Error += error => Application.Current.Dispatcher.BeginInvoke(new Action(() => { if (!_disposed) Report(error); }));
     }
-    private void Queue(Action action) => Application.Current.Dispatcher.BeginInvoke(action);
+    private void Queue(Action action) => Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+    { if (_disposed) return; action(); PublishInputContext(); }));
+    private void PublishInputContext() => _inputBridge.Publish(new(!_disposed && !Paused && !_capture.Busy, Settings.Trigger, Settings.Gestures, _wheel, _quick.IsVisible || _quickPending));
+    private void DrainInput()
+    {
+        var samples = _inputBridge.Drain(out bool overflowed);
+        if (_disposed) return;
+        if (overflowed)
+        {
+            // Never execute a partially dropped stroke after a long UI stall.
+            Cancel(); _heldTrigger = _heldRight = _consumeLeftUp = _consumeRightUp = false; _gesture = null;
+        }
+        else foreach (var sample in samples) OnMouse(sample);
+        _latest = _inputBridge.Latest; PublishInputContext();
+    }
     private void Tick()
     {
         if (_disposed) return;
+        _latest = _inputBridge.Latest;
         var foreground = Native.GetForegroundWindow(); _catalog.Observe(foreground);
         long now = Environment.TickCount64;
-        if (now >= _nextFocus || foreground != _checkedForeground)
+        if (_windowCache.Ready && _startupReady?.Task.IsCompleted != false && now >= _nextWindowRefresh && !_heldRight && !_heldTrigger && !_wheel)
+        { _nextWindowRefresh = now + 3000; _ = RefreshWindowCache(); }
+        if (!_focusChecking && (now >= _nextFocus || foreground != _checkedForeground))
         {
             _nextFocus = now + 250; _checkedForeground = foreground;
-            _autoFocus = WindowNative.GameFocused(foreground, Settings);
-            if (Paused != _lastPaused)
-            {
-                _lastPaused = Paused; if (Paused) Cancel();
-                _focusItem.Checked = Settings.ManualFocus;
-                _tray.Text = Paused ? (Settings.ManualFocus ? "MouseOrbit · 专注模式" : "MouseOrbit · 游戏／全屏专注") : "MouseOrbit";
-                Report(Paused ? "专注模式" : "");
-            }
+            _ = CheckFocus(foreground);
         }
+        if (Paused != _lastPaused)
+        {
+            _lastPaused = Paused; if (Paused) Cancel();
+            _focusItem.Checked = Settings.ManualFocus;
+            _tray.Text = Paused ? (Settings.ManualFocus ? "MouseOrbit · 专注模式" : "MouseOrbit · 游戏／全屏专注") : "MouseOrbit";
+            Report(Paused ? "专注模式" : "");
+        }
+        if (_inputBridge.HasPending) DrainInput();
+        PublishInputContext();
         if (Paused || _capture.Busy) return;
         if (_heldTrigger && _press.TryHold(now, (_latest.X - _origin.X) / _triggerScale, (_latest.Y - _origin.Y) / _triggerScale))
             BeginWheel(_origin, true);
@@ -94,38 +129,45 @@ internal sealed class OrbitController : IDisposable
             { if (_orbit.Visual.Selected != -1) { _orbit.Visual.Selected = -1; _orbit.Visual.InvalidateVisual(); } }
             else _orbit.Update(_latest);
         }
-        if (_heldRight && !_gestureCanceled) _trail.Refresh();
-        if (_heldRight && !_gestureCanceled && _gesture?.HasMovement == true)
+        if (_heldRight && !_gestureCanceled && _path.Points.Count > 1 && (_gesture?.VolumeMode == true || _lastGestureView != _path.Version))
         {
-            _gesture.TryEnterVolume(); _trail.Refresh();
-            if (_gesture.VolumeMode)
+            _lastGestureView = _path.Version;
+            string name = ""; bool global = false;
+            if (_gesture?.HasMovement == true)
             {
-                int steps = ApplyVolume(_gesture);
-                _hint.Update(_latest, _target, steps > 0 ? "音量 ↑" : steps < 0 ? "音量 ↓" : "音量 ↕", true);
+                _gesture.TryEnterVolume();
+                if (_gesture.VolumeMode)
+                {
+                    int steps = ApplyVolume(_gesture); global = true;
+                    name = steps > 0 ? "音量 ↑" : steps < 0 ? "音量 ↓" : "音量 ↕";
+                }
+                else
+                {
+                    string shape = _gesture.Recognize(); var id = Settings.GesturesMap.GetValueOrDefault(shape);
+                    name = id == null ? "继续划动" : Commands.Find(id).Name;
+                    global = id is "desktop" or "volumeUp" or "volumeDown";
+                }
             }
-            else
-            {
-                string shape = _gesture.Recognize();
-                var id = Settings.GesturesMap.GetValueOrDefault(shape);
-                _hint.Update(_latest, _target, id == null ? "继续划动" : Commands.Find(id).Name, id is "desktop" or "volumeUp" or "volumeDown");
-            }
+            _graphics.Update(_path.Points, _latest, _target, name, global);
         }
-        if (now >= _nextPreview && _quick.IsVisible == false && !_heldRight && !WindowNative.IsOwn(foreground))
+        PublishInputContext();
+    }
+    private async Task CheckFocus(nint foreground)
+    {
+        _focusChecking = true;
+        bool enabled = Settings.AutoFocus; var applications = Settings.FocusApplications.ToArray();
+        try
         {
-            _nextPreview = now + 5000;
-            WindowNative.GetWindowThreadProcessId(foreground, out uint pid);
-            _ = WindowPreviews.Load(new(foreground, pid, "", "", "", WindowNative.IsIconic(foreground), 1, 0));
+            bool focused = await Task.Run(() => WindowNative.GameFocused(foreground, enabled, applications));
+            if (_disposed) return;
+            if (foreground != Native.GetForegroundWindow() || enabled != Settings.AutoFocus || !applications.SequenceEqual(Settings.FocusApplications)) { _nextFocus = 0; return; }
+            _autoFocus = focused; PublishInputContext();
         }
+        finally { _focusChecking = false; }
     }
-    private bool FreshFullScreen()
+    private bool OnMouse(MouseSample sample)
     {
-        var fg = Native.GetForegroundWindow();
-        if (!Settings.AutoFocus || fg == _checkedForeground || WindowNative.IsOwn(fg) || WindowNative.IsDesktopSurface(fg) || !WindowNative.GetWindowRect(fg, out var box)) return false;
-        var area = System.Windows.Forms.Screen.FromHandle(fg).Bounds;
-        return box.Left <= area.Left && box.Top <= area.Top && box.Right >= area.Right && box.Bottom >= area.Bottom;
-    }
-    private bool OnMouse(int message, Native.MouseData data)
-    {
+        int message = sample.Message; var data = sample.Data;
         _latest = data.Pt;
         if (message == 0x202 && _consumeLeftUp) { _consumeLeftUp = false; return true; }
         if (message == 0x205 && _consumeRightUp) { _consumeRightUp = false; return true; }
@@ -133,12 +175,12 @@ internal sealed class OrbitController : IDisposable
         {
             if (message == 0x20C && (data.Mouse >> 16) != _triggerButton) return false;
             _heldTrigger = false;
-            var released = _press.End(Environment.TickCount64, (data.Pt.X - _origin.X) / _triggerScale, (data.Pt.Y - _origin.Y) / _triggerScale);
+            _path.Clear(); _graphics.Clear();
+            var released = _press.End(sample.Time, (data.Pt.X - _origin.X) / _triggerScale, (data.Pt.Y - _origin.Y) / _triggerScale);
             int version = _press.Version; var origin = _origin; var point = data.Pt;
             Queue(() =>
             {
                 if (version != _press.Version) return;
-                _trail.Clear();
                 if (Paused || _capture.Busy) return;
                 if (released == TriggerRelease.Panel) OpenQuick(origin);
                 else if (released == TriggerRelease.Wheel)
@@ -154,12 +196,13 @@ internal sealed class OrbitController : IDisposable
         }
         if (message == 0x205 && _heldRight)
         {
-            _gesture?.Add(data.Pt.X / _gestureScale, data.Pt.Y / _gestureScale, Environment.TickCount64);
+            _gesture?.Add(data.Pt.X / _gestureScale, data.Pt.Y / _gestureScale, sample.Time);
             _heldRight = false; var gesture = _gesture; _gesture = null; var target = _target; bool canceled = _gestureCanceled;
+            _path.Clear(); _graphics.Clear();
+            long version = _gestureVersion;
             Queue(() =>
             {
-                _hint.Clear(); _trail.Clear();
-                if (canceled || gesture == null || Paused) return;
+                if (canceled || gesture == null || Paused || version != _gestureVersion) return;
                 if (!gesture.HasMovement) { if (!Native.RightClick()) Report("右键菜单未能打开"); }
                 else if (gesture.VolumeMode) { ApplyVolume(gesture, true); }
                 else
@@ -173,22 +216,21 @@ internal sealed class OrbitController : IDisposable
             }); return true;
         }
         if (Paused || _capture.Busy) return false;
-        if (message is 0x204 or 0x20B or 0x207 && FreshFullScreen()) return false;
         if (_heldTrigger && message is 0x201 or 0x204)
         {
             if (message == 0x201) _consumeLeftUp = true; else _consumeRightUp = true;
             Cancel(); return true;
         }
-        if (_quick.IsVisible)
+        if (_quick.IsVisible || _quickPending)
         {
-            if (message == 0x204) { _consumeRightUp = true; Queue(() => _quick.Hide()); return true; }
-            if (message == 0x201 && !_quick.Contains(data.Pt)) Queue(() => _quick.Hide());
+            if (message == 0x204) { _consumeRightUp = true; Queue(() => { CancelQuickOpen(); _quick.Hide(); }); return true; }
+            if (message == 0x201 && !_quick.Contains(data.Pt)) Queue(() => { CancelQuickOpen(); _quick.Hide(); });
         }
         if (_heldRight && message == 0x201) { _consumeLeftUp = true; Cancel(); return true; }
         if (message == 0x200 && (_heldRight || _heldTrigger))
         {
-            if (_heldRight) _trail.Path.Add(new(data.Pt.X, data.Pt.Y));
-            if (_heldRight && !_gestureCanceled) _gesture?.Add(data.Pt.X / _gestureScale, data.Pt.Y / _gestureScale, Environment.TickCount64);
+            if (_heldRight) _path.Add(new(data.Pt.X, data.Pt.Y));
+            if (_heldRight && !_gestureCanceled) _gesture?.Add(data.Pt.X / _gestureScale, data.Pt.Y / _gestureScale, sample.Time);
             return false;
         }
         if (_heldTrigger && !_wheel && message == 0x20A) return true;
@@ -205,29 +247,24 @@ internal sealed class OrbitController : IDisposable
             _wheel = false; var point = data.Pt; Queue(() => FinishWheel(point)); return true;
         }
         if (_wheel && message == 0x204) { _consumeRightUp = true; Cancel(); return true; }
-        bool trigger = Settings.Trigger switch
+        bool trigger = sample.Start == MouseStart.Trigger;
+        if (trigger && !_heldRight && !_heldTrigger)
         {
-            "XButton1" => message == 0x20B && (data.Mouse >> 16) == 1,
-            "XButton2" => message == 0x20B && (data.Mouse >> 16) == 2,
-            "Middle" => message == 0x207, _ => false
-        };
-        if (trigger && !_heldRight)
-        {
-            _heldTrigger = true; _triggerUp = Settings.Trigger == "Middle" ? 0x208 : 0x20C; _triggerButton = data.Mouse >> 16;
+            _heldTrigger = true; _triggerUp = message == 0x207 ? 0x208 : 0x20C; _triggerButton = data.Mouse >> 16;
             _origin = data.Pt;
-            _press.Begin(Environment.TickCount64, _quick.IsVisible || _wheel);
-            _triggerScale = Math.Max(1, Native.GetDpiForWindow(Native.GetForegroundWindow()) / 96d);
-            if (_quick.IsVisible || _wheel) Queue(() => { _wheel = false; _wheelFromHold = false; _quick.Hide(); _orbit.Hide(); });
-            _target = WindowTarget.Capture(Native.GetForegroundWindow()); return true;
+            _press.Begin(sample.Time, _quick.IsVisible || _wheel || _quickPending);
+            _triggerScale = Math.Max(1, Native.GetDpiForWindow(sample.Target) / 96d);
+            if (_quick.IsVisible || _wheel || _quickPending) Queue(() => { _wheel = false; _wheelFromHold = false; CancelQuickOpen(); _quick.Hide(); _orbit.Hide(); });
+            _target = WindowTarget.Capture(sample.Target); return true;
         }
-        if (message == 0x204 && Settings.Gestures && !_heldTrigger)
+        if (sample.Start == MouseStart.Gesture && !_heldTrigger)
         {
-            var window = WindowNative.RootAt(data.Pt);
-            if (WindowNative.IsOwn(WindowNative.GetAncestor(WindowNative.WindowFromPoint(data.Pt), 2))) return false;
+            var window = sample.Target; _gestureVersion++; _lastGestureView = -1;
             _heldRight = true; _gestureCanceled = false; _target = WindowTarget.Capture(window);
-            _trail.Path.Begin(new(data.Pt.X, data.Pt.Y));
+            _graphics.Clear();
+            _path.Begin(new(data.Pt.X, data.Pt.Y));
             _gestureScale = window == 0 ? 1 : Math.Max(1, Native.GetDpiForWindow(window) / 96d);
-            _gesture = new StrokeGesture(data.Pt.X / _gestureScale, data.Pt.Y / _gestureScale, Settings.Sensitivity, Environment.TickCount64); return true;
+            _gesture = new StrokeGesture(data.Pt.X / _gestureScale, data.Pt.Y / _gestureScale, Settings.Sensitivity, sample.Time); return true;
         }
         return false;
     }
@@ -241,8 +278,9 @@ internal sealed class OrbitController : IDisposable
     }
     private void BeginWheel(Native.Point origin, bool held)
     {
+        CancelQuickOpen();
         _quick.Hide(); _page = 0; _wheelDelta = 0; _wheel = true; _wheelFromHold = held;
-        _orbit.Open(origin, Settings, holdToSelect: held);
+        _orbit.Open(origin, Settings, holdToSelect: held, targetPinned: _target.Valid && DesktopActions.IsTopmost(_target.Handle));
     }
     private static int ApplyVolume(StrokeGesture gesture, bool finish = false)
     {
@@ -279,7 +317,15 @@ internal sealed class OrbitController : IDisposable
         else if (command.Kind == CommandKind.Keys && !global && Native.GetForegroundWindow() != target.Handle) { Report("目标窗口已变化，已取消"); return false; }
         try
         {
-            bool ok = DesktopActions.Execute(command, target.Handle); Report(ok ? command.Name : "操作未完成"); return ok;
+            bool ok = DesktopActions.Execute(command, target.Handle);
+            if (ok && id == "topmost")
+            {
+                bool pinned = DesktopActions.IsTopmost(target.Handle);
+                Native.GetCursorPos(out var point); _feedback.NotifyPinned(pinned, point);
+                Report(pinned ? "已置顶" : "已取消置顶");
+            }
+            else Report(ok ? command.Name : "操作未完成");
+            return ok;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { Report("操作失败：" + ex.Message); return false; }
     }
@@ -289,12 +335,55 @@ internal sealed class OrbitController : IDisposable
         if (captureTarget && !WindowNative.IsOwn(Native.GetForegroundWindow())) _target = WindowTarget.Capture(Native.GetForegroundWindow());
         _wheel = false; _orbit.Hide(); Native.GetCursorPos(out var point); OpenQuick(point);
     }
+    internal void BeginStartup()
+    { _startupReady = new(TaskCreationOptions.RunContinuationsAsynchronously); _tray.Text = "MouseOrbit · 正在预读应用和图标"; }
+    internal async Task PreloadWindowsAsync()
+    {
+        await _windowCache.EnsureReadyAsync();
+        _nextWindowRefresh = Environment.TickCount64 + 3000;
+    }
+    internal void PrepareAssistant()
+    {
+        _quick.SetWindows(CachedWindows(Native.GetForegroundWindow()));
+        _quick.Prepare(QuickEntries?.Invoke() ?? new());
+    }
+    internal void CompleteStartup()
+    { _startupReady?.TrySetResult(); _tray.Text = Paused ? "MouseOrbit · 专注模式" : "MouseOrbit"; }
+    private IReadOnlyList<SwitchGroup> CachedWindows(nint exclude) => WindowCatalog.Group(_windowCache.Current.SelectMany(group => group.Windows)
+        .Where(window => WindowNative.IsWindow(window.Handle) && WindowNative.GetWindowThreadProcessId(window.Handle, out uint pid) != 0 && pid == window.Process), exclude);
+    private async Task RefreshWindowCache()
+    {
+        try
+        {
+            await _windowCache.RefreshAsync();
+            if (!_disposed && !Interacting) PrepareAssistant();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+        { if (!_disposed) Report("窗口列表更新失败：" + ex.Message); }
+    }
     private void OpenQuick(Native.Point point)
     {
         if (Paused || _capture.Busy) return;
-        var current = Native.GetForegroundWindow();
-        _quick.SetWindows(_catalog.Read(current)); _quick.Open(point, QuickEntries?.Invoke() ?? new()); QuickOpened?.Invoke();
+        _ = LoadQuick(point);
     }
+    private async Task LoadQuick(Native.Point point)
+    {
+        int request = ++_quickRequest; _quickPending = true; PublishInputContext();
+        try
+        {
+            if (_startupReady != null) await _startupReady.Task;
+            await _windowCache.EnsureReadyAsync();
+            if (_disposed || request != _quickRequest || Paused || _capture.Busy) return;
+            var entries = QuickEntries?.Invoke() ?? new();
+            var groups = CachedWindows(Native.GetForegroundWindow());
+            if (_disposed || request != _quickRequest || Paused || _capture.Busy) return;
+            _quick.SetWindows(groups); _quick.Open(point, entries); QuickOpened?.Invoke();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+        { if (!_disposed && request == _quickRequest) Report("窗口列表读取失败：" + ex.Message); }
+        finally { if (request == _quickRequest) { _quickPending = false; PublishInputContext(); } }
+    }
+    private void CancelQuickOpen() { _quickRequest++; _quickPending = false; }
     private async Task ExecuteEntry(DesktopEntry entry)
     {
         try
@@ -315,7 +404,7 @@ internal sealed class OrbitController : IDisposable
         if (id is "capture" or "gif")
         {
             Cancel(); Application.Current.MainWindow?.Hide(); await Task.Delay(160);
-            await _capture.Start(); return;
+            var capture = _capture.Start(); PublishInputContext(); await capture; PublishInputContext(); return;
         }
         _quick.Hide(); await Execute(id, _target);
     }
@@ -323,9 +412,11 @@ internal sealed class OrbitController : IDisposable
     { Application.Current.MainWindow.Hide(); return await Execute(command.Id, _target); }
     public void Cancel()
     {
-        _wheel = false; _wheelFromHold = false; _gestureCanceled = true; _press.Cancel();
+        _wheel = false; _wheelFromHold = false; _gestureCanceled = true; _press.Cancel(); _gestureVersion++;
+        CancelQuickOpen();
         if (_heldRight) { _heldRight = false; _consumeRightUp = true; _gesture = null; }
-        Queue(() => { _orbit.Hide(); _quick.Hide(); _hint.Clear(); _trail.Clear(); });
+        _path.Clear(); _graphics.Clear();
+        Queue(() => { _orbit.Hide(); _quick.Hide(); });
     }
     public void ChangeTheme(string? id = null)
     {
@@ -335,9 +426,9 @@ internal sealed class OrbitController : IDisposable
     }
     public void TogglePause() { Settings.ManualFocus = !Settings.ManualFocus; _focusItem.Checked = Settings.ManualFocus; if (Paused) Cancel(); Save(); Report(Settings.ManualFocus ? "专注模式" : ""); }
     public void Save()
-    { try { Settings.Save(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Report("设置保存失败：" + ex.Message); } }
-    public void OpenSettings() { _quick.Hide(); Application.Current.MainWindow.Show(); Application.Current.MainWindow.WindowState = WindowState.Normal; Application.Current.MainWindow.Activate(); }
+    { PublishInputContext(); try { Settings.Save(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Report("设置保存失败：" + ex.Message); } }
+    public void OpenSettings() { CancelQuickOpen(); _quick.Hide(); Application.Current.MainWindow.Show(); Application.Current.MainWindow.WindowState = WindowState.Normal; Application.Current.MainWindow.Activate(); PublishInputContext(); }
     private void Report(string text) { LastStatus = text; Status?.Invoke(text); }
     public void Dispose()
-    { _disposed = true; _timer.Stop(); _input.Dispose(); _capture.Dispose(); _hint.Dispose(); _trail.Dispose(); _tray.Visible = false; _tray.ContextMenuStrip?.Dispose(); _tray.Dispose(); _orbit.Close(); _quick.Close(); }
+    { _disposed = true; _timer.Stop(); _input.Dispose(); _capture.Dispose(); _graphics.Dispose(); _feedback.Dispose(); _tray.Visible = false; _tray.ContextMenuStrip?.Dispose(); _tray.Dispose(); _orbit.Close(); _quick.Close(); }
 }

@@ -38,7 +38,7 @@
       <Button Content="退出" Click="Quit_Click" Background="Transparent"/>
      </StackPanel>
     </Grid></Border>
-    <Grid x:Name="SettingsPanel" Grid.Column="1" Margin="28,6,28,20" Visibility="Collapsed">
+    <Grid x:Name="SettingsPanel" Grid.Column="1" Margin="28,6,28,20" Visibility="Hidden">
      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
      <DockPanel Margin="0,0,0,18"><Button Content="保存" Click="Save_Click" DockPanel.Dock="Right" Background="{DynamicResource Selected}"/><TextBlock Text="轮盘与手势" FontSize="22" VerticalAlignment="Center"/></DockPanel>
      <ScrollViewer x:Name="ContentScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -46,7 +46,7 @@
        <Grid Margin="0,0,0,18"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="240"/></Grid.ColumnDefinitions>
         <StackPanel VerticalAlignment="Center">
          <TextBlock Text="唤出按键" FontSize="13" Margin="0,0,0,12"/>
-         <ComboBox x:Name="TriggerCombo" Width="240" HorizontalAlignment="Left" Margin="0,0,0,15"><ComboBoxItem Content="鼠标侧键 1"/><ComboBoxItem Content="鼠标侧键 2"/><ComboBoxItem Content="鼠标中键"/></ComboBox>
+         <ComboBox x:Name="TriggerCombo" Width="240" HorizontalAlignment="Left" Margin="0,0,0,15"><ComboBoxItem Content="侧键 1（后退）"/><ComboBoxItem Content="侧键 2（前进）"/><ComboBoxItem Content="鼠标中键"/></ComboBox>
          <CheckBox x:Name="LearnCheck" Content="自动整理常用应用" IsChecked="True"/><CheckBox x:Name="AutoFocusCheck" Content="游戏／全屏专注" IsChecked="True"/>
          <Button Content="预览轮盘" Click="Preview_Click" HorizontalAlignment="Left" Margin="0,16,0,0"/>
         </StackPanel>
@@ -82,10 +82,10 @@
       <Button Content="窗口" Tag="windows" Click="Filter_Click" Margin="0,0,8,0" Padding="16,9"/>
       <Button Content="系统" Tag="system" Click="Filter_Click" Padding="16,9"/>
      </WrapPanel>
-     <Grid Grid.Row="2">
+     <Grid x:Name="ResultsHost" Grid.Row="2">
       <TextBlock x:Name="ResultsHeading" Visibility="Collapsed"/>
-      <ListBox x:Name="ResultsList" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
-       <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
+      <ListBox x:Name="ResultsList" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling">
+       <ListBox.ItemsPanel><ItemsPanelTemplate><local:TileVirtualizingPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
        <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="Padding" Value="0"/><Setter Property="Focusable" Value="False"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter/></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
        <ListBox.ItemTemplate><DataTemplate>
         <Grid Width="138" Height="133" Margin="0,0,6,7">

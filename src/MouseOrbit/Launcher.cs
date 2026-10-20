@@ -48,12 +48,19 @@ public sealed class Launcher
         try { if (File.Exists(ObservedPath)) _observed = JsonSerializer.Deserialize<Dictionary<string, DesktopEntry>>(File.ReadAllText(ObservedPath)) ?? new(); }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { _observed = new(); }
     }
-    public void Refresh()
+    public void Refresh() => ApplyScan(CreateScan()());
+    internal Func<IReadOnlyList<DesktopEntry>> CreateScan()
+    {
+        var observed = _observed.Values.ToArray(); var custom = _custom.ToArray();
+        return () => Scan(observed, custom);
+    }
+    internal void ApplyScan(IReadOnlyList<DesktopEntry> entries) { _entries.Clear(); _entries.AddRange(entries); }
+    private static IReadOnlyList<DesktopEntry> Scan(IReadOnlyList<DesktopEntry> observed, IReadOnlyList<string> custom)
     {
         var entries = new List<DesktopEntry>();
         entries.AddRange(OpenWindows.List());
-        entries.AddRange(_observed.Values.Where(e => File.Exists(e.Target)));
-        foreach (var path in _custom.Where(p => File.Exists(p) || Directory.Exists(p))) entries.Add(CustomEntry(path));
+        entries.AddRange(observed.Where(e => File.Exists(e.Target)));
+        foreach (var path in custom.Where(p => File.Exists(p) || Directory.Exists(p))) entries.Add(CustomEntry(path));
         foreach (var root in new[] { Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu) })
         {
             foreach (var file in Files(root, true).Where(f => Path.GetExtension(f).Equals(".lnk", StringComparison.OrdinalIgnoreCase) || Path.GetExtension(f).Equals(".appref-ms", StringComparison.OrdinalIgnoreCase)))
@@ -70,7 +77,7 @@ public sealed class Launcher
         AddFolder(entries, "桌面文件夹", Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
         AddFolder(entries, "文档文件夹", Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
         AddFolder(entries, "图片文件夹", Environment.GetFolderPath(Environment.SpecialFolder.MyPictures));
-        _entries.Clear(); _entries.AddRange(entries.DistinctBy(e => e.Id));
+        return entries.DistinctBy(e => e.Id).ToArray();
     }
     private static IEnumerable<string> Files(string root, bool recursive)
     {

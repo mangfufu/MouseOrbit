@@ -19,9 +19,15 @@ public partial class App : Application
         try
         {
             Controller = new OrbitController();
+            Controller.BeginStartup();
+            var windowsReady = Controller.PreloadWindowsAsync();
             var manager = new MainWindow(Controller);
             MainWindow = manager;
             await manager.InitializeLauncher();
+            await windowsReady;
+            manager.PrepareView();
+            Controller.PrepareAssistant();
+            Controller.CompleteStartup();
             if (!e.Args.Contains("--background")) Controller.OpenAssistant(false);
         }
         catch (Exception ex)

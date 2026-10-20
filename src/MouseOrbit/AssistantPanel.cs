@@ -11,31 +11,63 @@ public partial class MainWindow
     private string _filter = "frequent";
     private List<DesktopEntry> _results = new();
     private bool _launching;
-    internal Task InitializeLauncher() => RefreshIndex();
+    private long _lastIndexRefresh;
+    private bool _resultsDirty;
+    private readonly Dictionary<string, ListBox> _resultViews = new();
+    private ListBox? _activeResultsView;
+    internal async Task InitializeLauncher()
+    {
+        await RefreshIndex();
+        foreach (var command in Commands.All) CommandIcons.Get(command.Id);
+    }
     private readonly System.Windows.Threading.DispatcherTimer _usageTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private string? _observedId;
     private DateTime _observedSince;
     private bool _visitRecorded;
-    private void ObserveUsage()
+    private bool _observingUsage;
+    private async void ObserveUsage()
     {
-        if (_indexing || !_controller.Settings.LearnApplications || _controller.Paused) return;
-        var entry = OpenWindows.ForegroundApplication();
-        if (entry?.Id != _observedId) { _observedId = entry?.Id; _observedSince = DateTime.UtcNow; _visitRecorded = false; return; }
-        if (entry == null || _visitRecorded || DateTime.UtcNow - _observedSince < TimeSpan.FromSeconds(8)) return;
-        try { _launcher.Observe(entry); _visitRecorded = true; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _visitRecorded = true; AssistantStatus.Text = "使用习惯记录无法保存：" + ex.Message; }
+        if (_observingUsage || _indexing || !_controller.Settings.LearnApplications || _controller.Paused || _controller.Interacting) return;
+        _observingUsage = true;
+        var foreground = Native.GetForegroundWindow();
+        try
+        {
+            // Process modules and executable version resources can touch slow disks.
+            var entry = await Task.Run(OpenWindows.ForegroundApplication);
+            if (_indexing || _controller.Interacting || foreground != Native.GetForegroundWindow()) return;
+            if (entry?.Id != _observedId) { _observedId = entry?.Id; _observedSince = DateTime.UtcNow; _visitRecorded = false; return; }
+            if (entry == null || _visitRecorded || DateTime.UtcNow - _observedSince < TimeSpan.FromSeconds(8)) return;
+            try { _launcher.Observe(entry); _visitRecorded = true; _quickNeedsPreparation = true; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _visitRecorded = true; AssistantStatus.Text = "使用习惯记录无法保存：" + ex.Message; }
+        }
+        finally { _observingUsage = false; }
     }
+    private void RefreshIndexIfStale()
+    { if (!IsVisible && !_controller.Interacting && Environment.TickCount64 - _lastIndexRefresh >= 30_000) _ = RefreshIndex(); }
     private async Task RefreshIndex()
     {
         if (_indexing) return;
         _indexing = true;
-        try { await Task.Run(_launcher.Refresh); AssistantStatus.Text = ""; }
+        try
+        {
+            var scan = _launcher.CreateScan();
+            var entries = await Task.Run(scan);
+            await ShellIcons.PreloadAsync(entries.Select(_launcher.WithUsage).OrderByDescending(entry => entry.Pinned)
+                .ThenByDescending(entry => entry.LastUsed).Concat(entries));
+            _launcher.ApplyScan(entries); AssistantStatus.Text = "";
+        }
         catch (Exception ex) { AssistantStatus.Text = "索引失败：" + ex.Message; }
-        finally { _indexing = false; RefreshResults(); }
+        finally
+        {
+            _indexing = false; _lastIndexRefresh = Environment.TickCount64;
+            if (IsVisible) RefreshResults(); else _resultsDirty = true;
+            _quickNeedsPreparation = true;
+        }
     }
     private void RefreshResults()
     {
-        if (!_ready || _indexing) return;
+        if (!_ready) return;
+        _resultsDirty = false;
         IEnumerable<DesktopEntry> entries;
         {
             ResultsHeading.Text = _filter switch { "recent" => "最近使用", "frequent" => "常用与固定", "apps" => "应用", "windows" => "窗口管理", "system" => "桌面与媒体", _ => "常用入口与最近访问" };
@@ -48,22 +80,80 @@ public partial class MainWindow
                 _ => _launcher.Frequent().Take(4).Concat(_launcher.Entries.Where(e => e.Kind == "window").Take(3)).Concat(_launcher.Recent().Take(5)).Concat(_launcher.Entries.Where(e => e.Kind == "command" && new[] { "downloads", "explorer", "taskView", "settings" }.Contains(e.Target))).DistinctBy(e => e.Id)
             };
         }
-        _results = entries.Select(_launcher.WithUsage).ToList(); ResultsList.Tag = _filter; ResultsList.ItemsSource = _results; ResultsList.SelectedIndex = _results.Count > 0 ? 0 : -1;
+        _results = entries.Select(_launcher.WithUsage).ToList();
+        var view = ResultView(_filter);
+        if (view.ItemsSource is not System.Collections.ObjectModel.ObservableCollection<DesktopEntry> visible)
+        { visible = new(_results); view.ItemsSource = visible; }
+        else
+        {
+            var ids = _results.Select(entry => entry.Id).ToHashSet();
+            for (int i = visible.Count - 1; i >= 0; i--) if (!ids.Contains(visible[i].Id)) visible.RemoveAt(i);
+            for (int i = 0; i < _results.Count; i++)
+            {
+                var entry = _results[i];
+                if (i < visible.Count && visible[i].Id == entry.Id) { if (visible[i] != entry) visible[i] = entry; continue; }
+                int found = -1;
+                for (int j = i + 1; j < visible.Count; j++) if (visible[j].Id == entry.Id) { found = j; break; }
+                if (found < 0) visible.Insert(i, entry); else { visible.Move(found, i); if (visible[i] != entry) visible[i] = entry; }
+            }
+            while (visible.Count > _results.Count) visible.RemoveAt(visible.Count - 1);
+        }
+        if (view.SelectedIndex < 0 && visible.Count > 0) view.SelectedIndex = 0;
+        if (_activeResultsView != view)
+        {
+            if (_activeResultsView != null) _activeResultsView.Visibility = Visibility.Hidden;
+            view.Visibility = Visibility.Visible; _activeResultsView = view;
+        }
         EmptyText.Text = _results.Count > 0 ? "" : "暂无项目";
         foreach (var tab in FilterTabs.Children.OfType<Button>()) tab.Background = (string)tab.Tag == _filter ? Palette.Selected : System.Windows.Media.Brushes.Transparent;
     }
+    private void RefreshVisibleResults()
+    { if (IsVisible) RefreshResults(); else _resultsDirty = true; }
     private void ShowAssistant()
     {
-        AssistantPanel.Visibility = Visibility.Visible; SettingsPanel.Visibility = Visibility.Collapsed;
+        AssistantPanel.Visibility = Visibility.Visible; SettingsPanel.Visibility = Visibility.Hidden;
         LibraryNav.Background = Palette.Hover; SettingsNav.Background = System.Windows.Media.Brushes.Transparent;
-        _filter = "frequent"; RefreshResults(); _ = RefreshIndex();
+        _filter = "frequent"; RefreshResults();
     }
     private void AssistantNav_Click(object sender, RoutedEventArgs e) => ShowAssistant();
     private void SettingsNav_Click(object sender, RoutedEventArgs e)
-    { AssistantPanel.Visibility = Visibility.Collapsed; SettingsPanel.Visibility = Visibility.Visible; SettingsNav.Background = Palette.Hover; LibraryNav.Background = System.Windows.Media.Brushes.Transparent; ContentScroll.ScrollToTop(); }
+    { AssistantPanel.Visibility = Visibility.Hidden; SettingsPanel.Visibility = Visibility.Visible; SettingsNav.Background = Palette.Hover; LibraryNav.Background = System.Windows.Media.Brushes.Transparent; ContentScroll.ScrollToTop(); }
+    private ListBox ResultView(string filter)
+    {
+        if (_resultViews.Count == 0) { _resultViews["frequent"] = ResultsList; _activeResultsView = ResultsList; }
+        if (!_resultViews.TryGetValue(filter, out var view))
+        {
+            view = new ListBox { Background = System.Windows.Media.Brushes.Transparent, BorderThickness = new Thickness(0),
+                ItemsPanel = ResultsList.ItemsPanel, ItemTemplate = ResultsList.ItemTemplate, ItemContainerStyle = ResultsList.ItemContainerStyle,
+                Visibility = Visibility.Hidden };
+            ScrollViewer.SetHorizontalScrollBarVisibility(view, ScrollBarVisibility.Disabled); ScrollViewer.SetVerticalScrollBarVisibility(view, ScrollBarVisibility.Auto);
+            ScrollViewer.SetCanContentScroll(view, true); VirtualizingPanel.SetIsVirtualizing(view, true); VirtualizingPanel.SetVirtualizationMode(view, VirtualizationMode.Recycling);
+            _resultViews[filter] = view; ResultsHost.Children.Insert(0, view);
+        }
+        view.Tag = filter; return view;
+    }
+    internal void PrepareView()
+    {
+        var root = (FrameworkElement)Content; var size = new Size(Width, Height); string selected = _filter;
+        void Draw()
+        {
+            root.Measure(size); root.Arrange(new Rect(size)); root.UpdateLayout();
+            var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)Width, (int)Height, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); bitmap.Render(root);
+        }
+        foreach (string filter in new[] { "frequent", "recent", "apps", "windows", "system" }) { _filter = filter; RefreshResults(); Draw(); }
+        AssistantPanel.Visibility = Visibility.Hidden; SettingsPanel.Visibility = Visibility.Visible; Draw();
+        SettingsPanel.Visibility = Visibility.Hidden; AssistantPanel.Visibility = Visibility.Visible;
+        _filter = selected; RefreshResults(); Draw();
+    }
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshIndex();
     private void QuickPreview_Click(object sender, RoutedEventArgs e) => _controller.OpenAssistant();
     private Dictionary<string, IReadOnlyList<DesktopEntry>> _quickSnapshot = new();
+    private bool _quickNeedsPreparation;
+    private void PrepareChangedQuickPage()
+    {
+        if (!_quickNeedsPreparation || _indexing || _controller.Interacting) return;
+        _quickNeedsPreparation = false; _controller.PrepareAssistant();
+    }
     private Dictionary<string, IReadOnlyList<DesktopEntry>> BuildQuickEntries()
     {
         if (_indexing) return _quickSnapshot;
@@ -79,14 +169,14 @@ public partial class MainWindow
     }
     private void RecordQuickUsage(DesktopEntry entry)
     {
-        try { _launcher.Record(entry); }
+        try { _launcher.Record(entry); _quickNeedsPreparation = true; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AssistantStatus.Text = "操作已完成，但使用记录无法保存：" + ex.Message; }
     }
     private async void Results_DoubleClick(object sender, MouseButtonEventArgs e)
     {
         for (var parent = e.OriginalSource as DependencyObject; parent != null; parent = System.Windows.Media.VisualTreeHelper.GetParent(parent))
             if (parent is Button) return;
-        if (ResultsList.SelectedItem is DesktopEntry entry) await LaunchEntry(entry);
+        if (_activeResultsView?.SelectedItem is DesktopEntry entry) await LaunchEntry(entry);
     }
     private void Entries_DragOver(object sender, DragEventArgs e)
     { if (e.Data.GetDataPresent(DataFormats.FileDrop)) { e.Effects = DragDropEffects.Link; e.Handled = true; } }
@@ -102,7 +192,7 @@ public partial class MainWindow
     private void Pin_Click(object sender, RoutedEventArgs e)
     {
         var entry = (DesktopEntry)((Button)sender).Tag;
-        try { _launcher.TogglePin(entry); AssistantStatus.Text = _launcher.IsPinned(entry) ? "已固定 · " + entry.Name : "已取消固定 · " + entry.Name; RefreshResults(); }
+        try { _launcher.TogglePin(entry); _quickNeedsPreparation = true; AssistantStatus.Text = _launcher.IsPinned(entry) ? "已固定 · " + entry.Name : "已取消固定 · " + entry.Name; RefreshResults(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AssistantStatus.Text = "无法保存固定项：" + ex.Message; }
     }
     private void RemoveRecent_Click(object sender, RoutedEventArgs e)
@@ -116,8 +206,9 @@ public partial class MainWindow
         try
         {
             _launcher.RemoveFrequent(entry);
+            _quickNeedsPreparation = true;
             if (_quickSnapshot.TryGetValue("frequent", out var items)) _quickSnapshot["frequent"] = items.Where(e => e.Id != entry.Id).ToArray();
-            RefreshResults(); AssistantStatus.Text = ""; return true;
+            RefreshVisibleResults(); AssistantStatus.Text = ""; return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { AssistantStatus.Text = "移除失败：" + ex.Message; return false; }
@@ -127,8 +218,9 @@ public partial class MainWindow
         try
         {
             _launcher.RemoveRecent(entry);
+            _quickNeedsPreparation = true;
             if (_quickSnapshot.TryGetValue("recent", out var recent)) _quickSnapshot["recent"] = recent.Where(e => e.Id != entry.Id).ToArray();
-            RefreshResults(); AssistantStatus.Text = ""; return true;
+            RefreshVisibleResults(); AssistantStatus.Text = ""; return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { AssistantStatus.Text = "移除失败：" + ex.Message; return false; }
@@ -141,7 +233,7 @@ public partial class MainWindow
         {
             if (entry.Kind == "command") { if (!await _controller.ExecuteFromAssistant(Commands.Find(entry.Target))) { Show(); return false; } }
             else { Launcher.Open(entry); Hide(); }
-            try { _launcher.Record(entry); }
+            try { _launcher.Record(entry); _quickNeedsPreparation = true; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AssistantStatus.Text = "已打开，但使用记录无法保存：" + ex.Message; }
             return true;
         }

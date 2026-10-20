@@ -13,7 +13,9 @@ internal sealed class GifRecorderWindow : Window
 {
     private readonly System.Drawing.Rectangle _region;
     private readonly RecordingOutline _outline;
-    private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(125) };
+    internal const int FrameMilliseconds = 50;
+    private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(FrameMilliseconds) };
+    private readonly CheckBox _cursor = new() { Content = "显示鼠标", IsChecked = true, Foreground = Palette.Ink, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 8, 0) };
     private readonly Stopwatch _watch = new();
     private readonly TextBlock _clock = new() { Text = "GIF 00:00", FontFamily = Palette.PixelFont, FontSize = 22, Foreground = Palette.Accent, VerticalAlignment = VerticalAlignment.Center, Width = 112 };
     private readonly Button _start, _pause, _stop;
@@ -27,10 +29,11 @@ internal sealed class GifRecorderWindow : Window
     public event Action<string>? Failed;
     public GifRecorderWindow(System.Drawing.Rectangle region)
     {
-        _region = region; Width = 405; Height = 58;
+        _region = region; Width = 420; Height = 58;
         _outline = new RecordingOutline(region);
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize; AllowsTransparency = true; Background = Brushes.Transparent; ShowInTaskbar = false; ShowActivated = false; Topmost = true;
         var panel = new StackPanel { Orientation = Orientation.Horizontal }; panel.Children.Add(_clock);
+        panel.Children.Add(_cursor);
         _start = Palette.Button("开始", () => _ = Begin(), "开始录制"); panel.Children.Add(_start);
         _pause = Palette.Button("暂停", Pause, "暂停或继续"); _pause.IsEnabled = false; panel.Children.Add(_pause);
         _stop = Palette.Button("结束", () => _ = Stop(), "结束并预览"); _stop.IsEnabled = false; panel.Children.Add(_stop);
@@ -82,8 +85,9 @@ internal sealed class GifRecorderWindow : Window
     {
         try
         {
-            long elapsed = _watch.ElapsedMilliseconds; int delay = (int)Math.Clamp(elapsed - _previousFrame, 125, 2000); _previousFrame = elapsed;
-            await Task.Run(() => { var image = ScreenPixels.Read(_region, 1280); _writer!.Add(image, delay); });
+            long elapsed = _watch.ElapsedMilliseconds; int delay = (int)Math.Clamp(elapsed - _previousFrame, FrameMilliseconds, 2000); _previousFrame = elapsed;
+            bool includeCursor = _cursor.IsChecked == true;
+            await Task.Run(() => { var image = ScreenPixels.Read(_region, 1280, includeCursor); _writer!.Add(image, delay); });
         }
         catch (Exception ex) { if (!_ending) _ = Fail(ex); }
     }
@@ -120,48 +124,4 @@ internal sealed class GifRecorderWindow : Window
         finally { _writer = null; }
     }
     private void DeleteTemporary() { try { if (File.Exists(_path)) File.Delete(_path); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
-}
-
-internal sealed class GifPreviewWindow : Window
-{
-    private readonly string _path;
-    private readonly FileStream _stream;
-    private readonly GifBitmapDecoder _decoder;
-    private readonly Image _image = new() { Stretch = Stretch.Uniform };
-    private readonly TextBlock _status = new() { Foreground = Palette.Accent, Margin = new Thickness(8), VerticalAlignment = VerticalAlignment.Center };
-    private readonly DispatcherTimer _timer = new();
-    private int _index;
-    public event Action? Done;
-    public event Action? Again;
-    public GifPreviewWindow(string path)
-    {
-        _path = path; Title = "GIF 预览"; Width = 820; Height = 580; WindowStartupLocation = WindowStartupLocation.CenterScreen; ShowActivated = false;
-        Background = Palette.Paper; Foreground = Palette.Ink;
-        _stream = File.OpenRead(path);
-        try { _decoder = new(_stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.None); }
-        catch { _stream.Dispose(); throw; }
-        var layout = new DockPanel(); Content = layout;
-        var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(12) }; DockPanel.SetDock(bar, Dock.Bottom); layout.Children.Add(bar);
-        bar.Children.Add(Palette.Button("保存 GIF", Save, "保存 GIF"));
-        var pause = Palette.Button("暂停预览", () => { if (_timer.IsEnabled) _timer.Stop(); else _timer.Start(); }, "播放或暂停"); bar.Children.Add(pause);
-        bar.Children.Add(Palette.Button("重新录制", () => { Close(); Again?.Invoke(); }, "重新录制"));
-        bar.Children.Add(Palette.Button("取消", () => { Close(); Done?.Invoke(); }, "取消")); bar.Children.Add(_status);
-        layout.Children.Add(_image); ShowFrame();
-        _timer.Tick += (_, _) => { _index = (_index + 1) % _decoder.Frames.Count; ShowFrame(); }; _timer.Start();
-        Closed += (_, _) => { _timer.Stop(); _image.Source = null; _stream.Dispose(); try { File.Delete(_path); } catch (IOException) { } Done?.Invoke(); };
-    }
-    private void ShowFrame()
-    {
-        var frame = _decoder.Frames[_index]; _image.Source = frame; int delay = 125;
-        try { if (frame.Metadata is BitmapMetadata metadata && metadata.ContainsQuery("/grctlext/Delay")) delay = Math.Max(20, Convert.ToInt32(metadata.GetQuery("/grctlext/Delay")) * 10); }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or InvalidOperationException) { }
-        _timer.Interval = TimeSpan.FromMilliseconds(delay);
-    }
-    private void Save()
-    {
-        var dialog = new Microsoft.Win32.SaveFileDialog { Filter = "GIF 动图|*.gif", FileName = "MouseOrbit-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"), DefaultExt = ".gif" };
-        if (dialog.ShowDialog(this) != true) return;
-        try { File.Copy(_path, dialog.FileName, true); Close(); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _status.Text = "保存失败，请重试"; }
-    }
 }

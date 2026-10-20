@@ -58,14 +58,10 @@ internal static class Palette
     }
     public static Brush B(string value) { var brush = (Brush)new BrushConverter().ConvertFromString(value)!; brush.Freeze(); return brush; }
 
-    public static Button Button(object content, Action action, string? name = null)
+    private static readonly Dictionary<bool, ControlTemplate> ButtonTemplates = new();
+    private static ControlTemplate ButtonTemplate()
     {
-        var button = new Button
-        {
-            Content = content, Foreground = Ink, Background = Brushes.Transparent,
-            Padding = new Thickness(8), BorderThickness = new Thickness(0),
-            Cursor = System.Windows.Input.Cursors.Hand, Focusable = false
-        };
+        if (ButtonTemplates.TryGetValue(Pixel, out var cached)) return cached;
         var border = new FrameworkElementFactory(typeof(Border));
         border.Name = "Surface";
         border.SetValue(Border.CornerRadiusProperty, ButtonCorner);
@@ -80,7 +76,16 @@ internal static class Palette
         hover.Setters.Add(new Setter(Border.BackgroundProperty, Hover, "Surface")); template.Triggers.Add(hover);
         var pressed = new Trigger { Property = System.Windows.Controls.Primitives.ButtonBase.IsPressedProperty, Value = true };
         pressed.Setters.Add(new Setter(Border.BackgroundProperty, Selected, "Surface")); template.Triggers.Add(pressed);
-        button.Template = template;
+        ButtonTemplates[Pixel] = template; return template;
+    }
+    public static Button Button(object content, Action action, string? name = null)
+    {
+        var button = new Button
+        {
+            Content = content, Foreground = Ink, Background = Brushes.Transparent,
+            Padding = new Thickness(8), BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand, Focusable = false, Template = ButtonTemplate()
+        };
         if (name != null) { button.ToolTip = name; System.Windows.Automation.AutomationProperties.SetName(button, name); }
         button.Click += (_, _) => action();
         return button;

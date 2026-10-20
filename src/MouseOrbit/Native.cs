@@ -32,6 +32,19 @@ internal static class Native
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(nint hwnd, int attribute, ref int value, int size);
     internal static void DarkTitleBar(Window window)
     { int enabled = 1; DwmSetWindowAttribute(new WindowInteropHelper(window).Handle, 20, ref enabled, sizeof(int)); }
+    internal static void DisableTransitions(Window window)
+    { int enabled = 1; DwmSetWindowAttribute(new WindowInteropHelper(window).Handle, 3, ref enabled, sizeof(int)); }
+    [DllImport("gdi32.dll")] private static extern nint CreateRectRgn(int left, int top, int right, int bottom);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(nint value);
+    [DllImport("user32.dll", SetLastError = true)] private static extern int SetWindowRgn(nint window, nint region, bool redraw);
+    internal static void ClipPopup(Window window, bool hidden)
+    {
+        nint region = hidden ? CreateRectRgn(0, 0, 0, 0) : 0;
+        if (hidden && region == 0) throw new System.ComponentModel.Win32Exception();
+        if (SetWindowRgn(new WindowInteropHelper(window).Handle, region, true) != 0) return;
+        if (region != 0) DeleteObject(region);
+        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+    }
 
     internal static void OverlayStyle(Window window, bool clickThrough)
     {
@@ -41,7 +54,9 @@ internal static class Native
     internal static void Position(Window window, int x, int y)
     {
         var handle = new WindowInteropHelper(window).EnsureHandle();
-        SetWindowPos(handle, new nint(-1), x, y, 0, 0, 0x0011);
+        if (WindowNative.GetWindowRect(handle, out var box) && box.Left == x && box.Top == y) return;
+        // Topmost is established by the Window itself. Moving a hint must not reorder every overlay.
+        SetWindowPos(handle, 0, x, y, 0, 0, 0x0215); // NOSIZE | NOZORDER | NOACTIVATE | NOOWNERZORDER
     }
     internal static bool SendKeys(ushort[] keys)
     {
@@ -54,32 +69,5 @@ internal static class Native
     {
         Input[] inputs = [new() { Data = new InputUnion { Mouse = new MouseInput { Flags = 0x0008 } } }, new() { Data = new InputUnion { Mouse = new MouseInput { Flags = 0x0010 } } }];
         return SendInput(2, inputs, Marshal.SizeOf<Input>()) == 2;
-    }
-}
-
-internal sealed class GlobalInput : IDisposable
-{
-    private readonly Native.HookProc _mouseProc;
-    private nint _mouseHook;
-    // Callbacks only update small in-memory state and enqueue rendering work.
-    public Func<int, Native.MouseData, bool>? Mouse;
-    public GlobalInput()
-    {
-        _mouseProc = (code, message, data) =>
-        {
-            if (code >= 0)
-            {
-                var value = Marshal.PtrToStructure<Native.MouseData>(data);
-                if ((value.Flags & 1) == 0 && Mouse?.Invoke((int)message, value) == true) return 1;
-            }
-            return Native.CallNextHookEx(_mouseHook, code, message, data);
-        };
-        _mouseHook = Native.SetWindowsHookEx(14, _mouseProc, Native.GetModuleHandle(null), 0);
-        if (_mouseHook == 0) { Dispose(); throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "无法注册全局鼠标输入"); }
-    }
-    public void Dispose()
-    {
-        if (_mouseHook != 0) Native.UnhookWindowsHookEx(_mouseHook);
-        _mouseHook = 0;
     }
 }

@@ -1,38 +1,67 @@
-using System.Windows.Controls;
 using System.Windows.Media;
 
 namespace MouseOrbit;
 
-internal sealed class GestureHint : Window
+internal readonly record struct OverlayColors(Color Surface, Color Ink, Color Muted, Color Edge, Color Accent, string Theme)
 {
-    private readonly TextBlock _name = new() { FontSize = 14, Foreground = Palette.Ink, TextTrimming = TextTrimming.CharacterEllipsis };
-    private readonly TextBlock _target = new() { FontSize = 11, Foreground = Palette.Muted, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 5, 0, 0) };
-    private readonly Window _frame;
-    public GestureHint()
+    internal static OverlayColors Capture() => new(Palette.Surface.Color, Palette.Ink.Color, Palette.Muted.Color, Palette.Edge.Color, Palette.Accent.Color, Palette.Current.Id);
+}
+
+internal sealed class GestureHint : IDisposable
+{
+    private readonly LayeredSurface _surface = new("MouseOrbit · 手势提示");
+    private readonly WindowOutline _outline = new();
+    private readonly System.Drawing.Font _nameFont = new("Microsoft YaHei UI", 14, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Pixel);
+    private readonly System.Drawing.Font _titleFont = new("Microsoft YaHei UI", 11, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Pixel);
+    private nint _titleWindow;
+    private long _nextTitle;
+    private string _title = "", _paintedName = "", _paintedTitle = "", _paintedTheme = "";
+    private double _paintedScale;
+    internal nint Handle => _surface.Handle;
+    internal System.Windows.Media.Imaging.BitmapSource Snapshot() => _surface.Snapshot();
+    private static System.Drawing.Color ColorOf(Color color) => System.Drawing.Color.FromArgb(color.A, color.R, color.G, color.B);
+    public void Prepare(OverlayColors? colors = null) => Paint("继续划动", "MouseOrbit · 窗口", 1, 0, 0, colors ?? OverlayColors.Capture(), false);
+    private void Paint(string name, string title, double scale, int x, int y, OverlayColors colors, bool show = true)
     {
-        Width = 270; Height = 67; WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize; AllowsTransparency = true; Background = Brushes.Transparent;
-        ShowActivated = false; ShowInTaskbar = false; Topmost = true;
-        var stack = new StackPanel(); stack.Children.Add(_name); stack.Children.Add(_target);
-        Content = new Border { Background = Palette.Surface, BorderBrush = Palette.Edge, BorderThickness = new Thickness(1), Padding = new Thickness(12, 10, 12, 8), Child = stack };
-        SourceInitialized += (_, _) => Native.OverlayStyle(this, true);
-        _frame = new Window { WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize, AllowsTransparency = true, Background = Brushes.Transparent, ShowActivated = false, ShowInTaskbar = false, Topmost = true,
-            Content = new Border { BorderBrush = Palette.Accent, BorderThickness = new Thickness(2), Background = Brushes.Transparent } };
-        _frame.SourceInitialized += (_, _) => Native.OverlayStyle(_frame, true);
+        _surface.Paint(new Rect(x, y, Math.Ceiling(270 * scale), Math.Ceiling(67 * scale)), graphics =>
+        {
+            graphics.ScaleTransform((float)scale, (float)scale);
+            graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            using var background = new System.Drawing.SolidBrush(ColorOf(colors.Surface));
+            using var ink = new System.Drawing.SolidBrush(ColorOf(colors.Ink));
+            using var muted = new System.Drawing.SolidBrush(ColorOf(colors.Muted));
+            using var edge = new System.Drawing.Pen(ColorOf(colors.Edge), 1);
+            using var format = new System.Drawing.StringFormat { Trimming = System.Drawing.StringTrimming.EllipsisCharacter, FormatFlags = System.Drawing.StringFormatFlags.NoWrap };
+            graphics.FillRectangle(background, 0, 0, 270, 67); graphics.DrawRectangle(edge, .5f, .5f, 269, 66);
+            graphics.DrawString(name, _nameFont, ink, new System.Drawing.RectangleF(12, 9, 246, 22), format);
+            graphics.DrawString(title, _titleFont, muted, new System.Drawing.RectangleF(12, 34, 246, 20), format);
+        }, show);
+        _paintedName = name; _paintedTitle = title; _paintedTheme = colors.Theme; _paintedScale = scale;
     }
-    public void Update(Native.Point point, WindowTarget target, string name, bool global = false)
+    public void Update(Native.Point point, WindowTarget target, string name, bool global = false, OverlayColors? palette = null)
     {
-        _name.Text = name; _target.Text = global ? "" : OpenWindows.Title(target.Handle);
-        Native.Position(this, point.X + 22, point.Y + 20);
-        double dpi = Native.GetDpiForWindow(new System.Windows.Interop.WindowInteropHelper(this).Handle) / 96d;
+        var colors = palette ?? OverlayColors.Capture();
+        if (!global && (_titleWindow != target.Handle || Environment.TickCount64 >= _nextTitle))
+        { _titleWindow = target.Handle; _nextTitle = Environment.TickCount64 + 1000; _title = OpenWindows.Title(target.Handle); }
+        string title = global ? "" : _title;
+        double scale = Math.Max(1, Native.GetDpiForWindow(Handle) / 96d);
         var area = System.Windows.Forms.Screen.FromPoint(new System.Drawing.Point(point.X, point.Y)).WorkingArea;
-        Native.Position(this, Math.Clamp(point.X + 22, area.Left, Math.Max(area.Left, area.Right - (int)(Width * dpi))), Math.Clamp(point.Y + 20, area.Top, Math.Max(area.Top, area.Bottom - (int)(Height * dpi))));
-        if (!IsVisible) Show();
-        if (global || !target.Valid || !WindowNative.GetWindowRect(target.Handle, out var box)) { _frame.Hide(); return; }
-        Native.Position(_frame, box.Left, box.Top);
-        double scale = Native.GetDpiForWindow(new System.Windows.Interop.WindowInteropHelper(_frame).Handle) / 96d;
-        _frame.Width = Math.Max(1, box.Width / scale); _frame.Height = Math.Max(1, box.Height / scale);
-        if (!_frame.IsVisible) _frame.Show();
+        int x = Math.Clamp(point.X + 22, area.Left, Math.Max(area.Left, area.Right - (int)Math.Ceiling(270 * scale)));
+        int y = Math.Clamp(point.Y + 20, area.Top, Math.Max(area.Top, area.Bottom - (int)Math.Ceiling(67 * scale)));
+        _surface.Move(x, y);
+        double movedScale = Math.Max(1, Native.GetDpiForWindow(Handle) / 96d);
+        if (movedScale != scale)
+        {
+            scale = movedScale;
+            x = Math.Clamp(point.X + 22, area.Left, Math.Max(area.Left, area.Right - (int)Math.Ceiling(270 * scale)));
+            y = Math.Clamp(point.Y + 20, area.Top, Math.Max(area.Top, area.Bottom - (int)Math.Ceiling(67 * scale)));
+            _surface.Move(x, y);
+        }
+        if (_paintedName != name || _paintedTitle != title || _paintedTheme != colors.Theme || _paintedScale != scale) Paint(name, title, scale, x, y, colors);
+        else _surface.Show();
+        if (global || !target.Valid || !WindowNative.GetWindowRect(target.Handle, out var box)) { _outline.Hide(); return; }
+        _outline.Show(box, colors.Accent);
     }
-    public void Clear() { Hide(); _frame.Hide(); }
-    public void Dispose() { _frame.Close(); Close(); }
+    public void Clear() { _surface.Hide(); _outline.Hide(); }
+    public void Dispose() { _outline.Dispose(); _surface.Dispose(); _nameFont.Dispose(); _titleFont.Dispose(); }
 }

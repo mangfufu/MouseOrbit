@@ -9,10 +9,15 @@ internal sealed record Markup(string Kind, Point Start, Point End, Color Color, 
 
 internal sealed class CaptureDocument
 {
-    public BitmapSource Image { get; }
+    public BitmapSource Image { get; private set; }
     public List<Markup> Marks { get; } = new();
     private readonly Stack<Markup> _redo = new();
     public CaptureDocument(BitmapSource image) { Image = image; }
+    public void SetImage(BitmapSource image)
+    {
+        if (image.PixelWidth != Image.PixelWidth || image.PixelHeight != Image.PixelHeight) throw new ArgumentException("Frame dimensions changed");
+        Image = image;
+    }
     public void Add(Markup mark) { Marks.Add(mark); _redo.Clear(); }
     public void Undo() { if (Marks.Count > 0) { _redo.Push(Marks[^1]); Marks.RemoveAt(Marks.Count - 1); } }
     public void Redo() { if (_redo.Count > 0) Marks.Add(_redo.Pop()); }
@@ -63,10 +68,14 @@ internal sealed class CaptureDocument
 internal static class ScreenPixels
 {
     [DllImport("gdi32.dll")] private static extern bool DeleteObject(nint handle);
-    internal static BitmapSource Read(System.Drawing.Rectangle area, int maximumEdge = int.MaxValue)
+    internal static BitmapSource Read(System.Drawing.Rectangle area, int maximumEdge = int.MaxValue, bool includeCursor = false)
     {
         using var bitmap = new System.Drawing.Bitmap(area.Width, area.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        using (var graphics = System.Drawing.Graphics.FromImage(bitmap)) graphics.CopyFromScreen(area.Location, System.Drawing.Point.Empty, area.Size, System.Drawing.CopyPixelOperation.SourceCopy);
+        using (var graphics = System.Drawing.Graphics.FromImage(bitmap))
+        {
+            graphics.CopyFromScreen(area.Location, System.Drawing.Point.Empty, area.Size, System.Drawing.CopyPixelOperation.SourceCopy);
+            if (includeCursor) ScreenCursor.Draw(graphics, area);
+        }
         if (Math.Max(area.Width, area.Height) > maximumEdge)
         {
             double scale = maximumEdge / (double)Math.Max(area.Width, area.Height);

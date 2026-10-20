@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
 
 namespace MouseOrbit;
 
@@ -18,10 +17,11 @@ internal sealed class OrbitWindow : Window
         Content = Visual;
         SourceInitialized += (_, _) => Native.OverlayStyle(this, true);
     }
-    public void Open(Native.Point point, Preferences preferences, bool gesture = false, int page = 0, bool holdToSelect = false)
+    public void Open(Native.Point point, Preferences preferences, bool gesture = false, int page = 0, bool holdToSelect = false, bool targetPinned = false)
     {
         HoldToSelect = holdToSelect;
         Visual.Settings = preferences; Visual.Page = page; Visual.GestureMode = gesture; Visual.Pattern = ""; Visual.Selected = -1; Visual.Trail.Clear();
+        Visual.TargetPinned = targetPinned;
         Native.Position(this, point.X, point.Y);
         var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
         double dpi = Native.GetDpiForWindow(handle) / 96d;
@@ -34,7 +34,7 @@ internal sealed class OrbitWindow : Window
         Native.Position(this, x, y);
         CenterPixels = new(x + half, y + half);
         Show();
-        Visual.BeginAnimation(OpacityProperty, new DoubleAnimation(.65, 1, TimeSpan.FromMilliseconds(120)));
+        Visual.Opacity = 1;
         Visual.InvalidateVisual();
     }
     public void Update(Native.Point point, string? pattern = null)
@@ -64,10 +64,18 @@ public sealed class OrbitVisual : FrameworkElement
     public Preferences Settings { get; set; } = new();
     public int Selected { get; set; } = -1;
     public int Page { get; set; }
+    public bool TargetPinned { get; set; }
     public bool GestureMode { get; set; }
     public string Pattern { get; set; } = "";
     public List<System.Windows.Point> Trail { get; } = new();
     private static SolidColorBrush Brush(string color) => (SolidColorBrush)new BrushConverter().ConvertFromString(color)!;
+    private static SolidColorBrush TileBrush(bool selected)
+    {
+        var surface = Palette.Surface.Color; var accent = Palette.Accent.Color;
+        byte Tint(byte source, byte ink) => (byte)Math.Round(source * .78 + ink * .22);
+        var color = selected ? Color.FromArgb(surface.A, Tint(surface.R, accent.R), Tint(surface.G, accent.G), Tint(surface.B, accent.B)) : surface;
+        var brush = new SolidColorBrush(color); brush.Freeze(); return brush;
+    }
     private void Text(DrawingContext dc, string value, double size, Brush brush, double x, double y, bool bold = false)
     {
         var text = new FormattedText(value, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
@@ -89,6 +97,8 @@ public sealed class OrbitVisual : FrameworkElement
             Text(dc, label, 12, Palette.Muted, 210, 225);
             dc.Pop(); dc.Pop(); return;
         }
+        // Keep the eight tiles separate. Hover changes RGB, never their alpha or geometry.
+        var idle = TileBrush(false); var hover = TileBrush(true);
         for (int i = 0; i < 8; i++)
         {
             double angle = (i * 45 - 90) * Math.PI / 180;
@@ -96,11 +106,12 @@ public sealed class OrbitVisual : FrameworkElement
             bool active = i == Selected;
             var rect = new Rect(p.X - 38, p.Y - 38, 76, 76);
             double radius = Palette.Pixel ? 1 : Palette.Current.Radius;
-            dc.DrawRoundedRectangle(Palette.B("#0A435158"), null, new Rect(rect.X, rect.Y + 2, rect.Width, rect.Height), radius, radius);
-            dc.DrawRoundedRectangle(active ? Palette.Selected : Palette.Surface, new Pen(Palette.Edge, 1), rect, radius, radius);
+            dc.DrawRoundedRectangle(active ? hover : idle, new Pen(Palette.Edge, 1), rect, radius, radius);
             var command = Commands.Find(Settings.Wheel[i]);
             dc.DrawImage(CommandIcons.Get(command.Id), new Rect(p.X - 12, p.Y - 22, 24, 24));
-            Text(dc, command.Name, 10.5, Palette.Ink, p.X, p.Y + 20, active);
+            bool pinned = command.Id == "topmost" && TargetPinned;
+            if (pinned) dc.DrawEllipse(Palette.Accent, null, new Point(rect.Right - 8, rect.Top + 8), 3, 3);
+            Text(dc, pinned ? "取消置顶" : command.Name, 10.5, Palette.Ink, p.X, p.Y + 20);
         }
         dc.Pop();
     }

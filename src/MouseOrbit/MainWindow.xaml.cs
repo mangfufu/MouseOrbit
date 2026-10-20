@@ -57,9 +57,9 @@ public partial class MainWindow : Window
         controller.RemoveRecentEntry = RemoveRecentEntry;
         controller.RemoveFrequentEntry = RemoveFrequentEntry;
         BuildQuickEntries();
-        controller.QuickOpened += () => _ = RefreshIndex();
+        IsVisibleChanged += (_, _) => { if (IsVisible && _resultsDirty) RefreshResults(); };
         controller.EntryOpened += entry => RecordQuickUsage(entry);
-        _usageTimer.Tick += (_, _) => ObserveUsage(); _usageTimer.Start();
+        _usageTimer.Tick += (_, _) => { ObserveUsage(); RefreshIndexIfStale(); PrepareChangedQuickPage(); }; _usageTimer.Start();
     }
     private void LoadWheelPage(int page)
     {

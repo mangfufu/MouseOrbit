@@ -1,10 +1,7 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows.Interop;
-using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
 namespace MouseOrbit;
@@ -52,14 +49,17 @@ internal static class WindowNative
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return ""; }
     }
     internal static bool GameFocused(nint window, Preferences settings)
+        => GameFocused(window, settings.AutoFocus, settings.FocusApplications);
+    internal static bool GameFocused(nint window, bool enabled, IReadOnlyList<string> applications)
     {
-        if (!settings.AutoFocus || window == 0 || IsOwn(window) || IsDesktopSurface(window)) return false;
-        string path = ProcessPath(window);
-        if (settings.FocusApplications.Any(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase))) return true;
+        if (!enabled || window == 0 || IsOwn(window) || IsDesktopSurface(window)) return false;
         if (SHQueryUserNotificationState(out int state) == 0 && state == 3) return true;
         if (!GetWindowRect(window, out var bounds)) return false;
         var screen = System.Windows.Forms.Screen.FromHandle(window).Bounds;
         bool full = bounds.Left <= screen.Left + 2 && bounds.Top <= screen.Top + 2 && bounds.Right >= screen.Right - 2 && bounds.Bottom >= screen.Bottom - 2;
+        if (!full && applications.Count == 0) return false;
+        string path = ProcessPath(window);
+        if (applications.Any(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase))) return true;
         if (!full) return false;
         // Full-screen optimizations often report BUSY, rather than exclusive D3D.
         bool gamePath = path.Contains("\\steamapps\\common\\", StringComparison.OrdinalIgnoreCase)
@@ -103,14 +103,15 @@ internal sealed record SwitchGroup(string Key, string Name, IReadOnlyList<Switch
 
 internal sealed class WindowCatalog
 {
-    private readonly Dictionary<(nint, uint), long> _recent = new();
+    private readonly ConcurrentDictionary<(nint, uint), long> _recent = new();
+    private readonly Dictionary<uint, (long Started, string Path, string Name)> _processes = new();
     private nint _foreground;
     public void Observe(nint window)
     {
         if (window == 0 || window == _foreground || WindowNative.IsOwn(window)) return;
         WindowNative.GetWindowThreadProcessId(window, out uint pid);
         _recent[(window, pid)] = DateTime.UtcNow.Ticks; _foreground = window;
-        if (_recent.Count > 300) foreach (var key in _recent.Keys.Where(k => !WindowNative.IsWindow(k.Item1)).ToArray()) _recent.Remove(key);
+        if (_recent.Count > 300) foreach (var key in _recent.Keys.Where(k => !WindowNative.IsWindow(k.Item1)).ToArray()) _recent.TryRemove(key, out _);
     }
     public IReadOnlyList<SwitchGroup> Read(nint exclude)
     {
@@ -126,9 +127,16 @@ internal sealed class WindowCatalog
                 {
                     using var process = Process.GetProcessById((int)pid);
                     if (process.ProcessName == "MouseOrbit") return true;
-                    string path = process.MainModule?.FileName ?? process.ProcessName;
-                    string name = process.MainModule?.FileVersionInfo.FileDescription ?? process.ProcessName;
-                    app = (path, name); processes[pid] = app;
+                    long started = process.StartTime.ToUniversalTime().Ticks;
+                    if (_processes.TryGetValue(pid, out var cached) && cached.Started == started) app = (cached.Path, cached.Name);
+                    else
+                    {
+                        var module = process.MainModule;
+                        string path = module?.FileName ?? process.ProcessName;
+                        string name = module?.FileVersionInfo.FileDescription ?? process.ProcessName;
+                        app = (path, name); _processes[pid] = (started, path, name);
+                    }
+                    processes[pid] = app;
                 }
                 catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { app = ("pid:" + pid, title); processes[pid] = app; }
             }
@@ -137,6 +145,7 @@ internal sealed class WindowCatalog
                 _recent.GetValueOrDefault((window, pid), seed--)));
             return true;
         }, 0);
+        foreach (uint pid in _processes.Keys.Where(pid => !processes.ContainsKey(pid)).ToArray()) _processes.Remove(pid);
         return Group(entries, exclude);
     }
     internal static IReadOnlyList<SwitchGroup> Group(IEnumerable<SwitchWindow> windows, nint exclude) => windows.Where(w => w.Handle != exclude)
@@ -151,50 +160,5 @@ internal static class PanelPlacement
     {
         width = Math.Min(width, area.Width); height = Math.Min(height, area.Height);
         return new(Math.Clamp(x - 82, area.Left, area.Right - width), Math.Clamp(y - 90, area.Top, area.Bottom - height), width, height);
-    }
-}
-
-internal static class WindowPreviews
-{
-    private static readonly Dictionary<(nint, uint), BitmapSource> Cache = new();
-    private static readonly SemaphoreSlim Slots = new(2);
-    [DllImport("user32.dll")] private static extern bool PrintWindow(nint window, nint dc, uint flags);
-    [DllImport("gdi32.dll")] private static extern bool DeleteObject(nint value);
-    internal static BitmapSource? Cached(SwitchWindow window)
-    { lock (Cache) return Cache.GetValueOrDefault((window.Handle, window.Process)); }
-    internal static async Task<BitmapSource?> Load(SwitchWindow window)
-    {
-        var key = (window.Handle, window.Process);
-        if (window.Minimized) { lock (Cache) return Cache.GetValueOrDefault(key); }
-        var job = Task.Run(async () =>
-        {
-            if (!await Slots.WaitAsync(50)) return null;
-            try
-            {
-                if (!WindowNative.GetWindowRect(window.Handle, out var rect) || rect.Width < 10 || rect.Height < 10 || rect.Width > 8000 || rect.Height > 5000) return null;
-                using var bitmap = new System.Drawing.Bitmap(rect.Width, rect.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-                using (var graphics = System.Drawing.Graphics.FromImage(bitmap))
-                {
-                    var dc = graphics.GetHdc(); bool ok;
-                    try { ok = PrintWindow(window.Handle, dc, 2); } finally { graphics.ReleaseHdc(dc); }
-                    if (!ok) return null;
-                }
-                using var small = new System.Drawing.Bitmap(320, Math.Max(1, (int)(320d * rect.Height / rect.Width)));
-                using (var g = System.Drawing.Graphics.FromImage(small)) { g.Clear(System.Drawing.Color.FromArgb(45, 45, 40)); g.DrawImage(bitmap, 0, 0, small.Width, small.Height); }
-                var handle = small.GetHbitmap();
-                try
-                {
-                    var source = Imaging.CreateBitmapSourceFromHBitmap(handle, 0, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions()); source.Freeze();
-                    lock (Cache) { if (Cache.Count > 100) Cache.Clear(); Cache[key] = source; }
-                    return source;
-                }
-                finally { DeleteObject(handle); }
-            }
-            catch (Exception ex) when (ex is ArgumentException or System.Runtime.InteropServices.ExternalException or InvalidOperationException) { return null; }
-            finally { Slots.Release(); }
-        });
-        var completed = await Task.WhenAny(job, Task.Delay(650));
-        if (completed == job) return await job;
-        lock (Cache) return Cache.GetValueOrDefault(key);
     }
 }

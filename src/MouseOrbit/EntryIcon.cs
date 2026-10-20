@@ -26,11 +26,13 @@ public sealed class EntryIcon : Image
     {
         var image = (EntryIcon)sender;
         var entry = args.NewValue as DesktopEntry;
+        if (entry != null && entry.Kind != "command" && ShellIcons.TryGet(entry, out var cached))
+        { image.Source = cached ?? CommandIcons.Get(entry.Kind == "folder" ? "folder" : entry.Kind == "window" ? "window" : "file"); return; }
         image.Source = CommandIcons.Get(entry?.Kind == "command" ? entry.Target : entry?.Kind == "folder" ? "folder" : entry?.Kind == "window" ? "window" : "file");
         if (entry == null || entry.Kind == "command") return;
         var result = await ShellIcons.Load(entry).ConfigureAwait(false);
         if (!image.Dispatcher.HasShutdownStarted)
-            _ = image.Dispatcher.BeginInvoke(new Action(() =>
+            _ = image.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() =>
             {
                 if (ReferenceEquals(image.Entry, entry) && result != null) image.Source = result;
             }));
@@ -39,7 +41,9 @@ public sealed class EntryIcon : Image
 
 internal static class ShellIcons
 {
-    private static readonly ConcurrentDictionary<string, Lazy<Task<ImageSource?>>> Cache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly IconCache Cache = new();
+    private static long _queuedReads;
+    internal static long QueuedReads => Interlocked.Read(ref _queuedReads);
     private static readonly BlockingCollection<(DesktopEntry Entry, TaskCompletionSource<ImageSource?> Completion)> Queue = new();
     static ShellIcons()
     {
@@ -83,13 +87,17 @@ internal static class ShellIcons
 
     public static Task<ImageSource?> Load(DesktopEntry entry)
     {
-        if (Cache.Count > 512) Cache.Clear();
-        return Cache.GetOrAdd(entry.Kind + ":" + entry.Target, _ => new Lazy<Task<ImageSource?>>(() =>
+        return Cache.Get(Key(entry), () =>
         {
             var completion = new TaskCompletionSource<ImageSource?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Interlocked.Increment(ref _queuedReads);
             Queue.Add((entry, completion)); return completion.Task;
-        })).Value;
+        });
     }
+    private static string Key(DesktopEntry entry) => entry.Kind + ":" + entry.Target;
+    internal static bool TryGet(DesktopEntry entry, out ImageSource? image) => Cache.TryGet(Key(entry), out image);
+    internal static Task PreloadAsync(IEnumerable<DesktopEntry> entries) => Task.WhenAll(entries.Where(e => e.Kind != "command")
+        .DistinctBy(Key, StringComparer.OrdinalIgnoreCase).Select(Load));
     private static ImageSource? Read(DesktopEntry entry)
     {
         var path = entry.Target;

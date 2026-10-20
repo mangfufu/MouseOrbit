@@ -43,10 +43,10 @@ internal sealed class CaptureTools : IDisposable
                         _recorder = null;
                         try
                         {
-                            _preview = new GifPreviewWindow(path);
+                            _preview = new GifPreviewWindow(path, region);
                             _preview.Done += End;
                             _preview.Again += () => { End(); _ = Start(); };
-                            _preview.Show();
+                            _preview.Open();
                         }
                         catch (Exception ex) { Error?.Invoke("GIF 预览失败：" + ex.Message); try { File.Delete(path); } catch (IOException) { } End(); }
                     };
@@ -192,7 +192,7 @@ internal sealed class CaptureOverlay : Window
 
 internal sealed class CaptureSurface : Canvas
 {
-    private readonly BitmapSource _screen;
+    private BitmapSource _screen;
     private Point _start;
     private bool _drawing;
     private Markup? _current;
@@ -278,6 +278,11 @@ internal sealed class CaptureSurface : Canvas
         Children.Remove(_text); _text = null; InvalidateVisual();
     }
     public void Reset() { CommitText(); Document = null; Region = Rect.Empty; _current = null; InvalidateVisual(); }
+    internal void ShowFrame(BitmapSource frame)
+    {
+        if (frame.PixelWidth != _screen.PixelWidth || frame.PixelHeight != _screen.PixelHeight) throw new ArgumentException("Frame dimensions changed");
+        _screen = frame; Document?.SetImage(frame); InvalidateVisual();
+    }
     protected override void OnRender(DrawingContext dc)
     {
         base.OnRender(dc); var all = new Rect(0, 0, ActualWidth, ActualHeight); dc.DrawImage(_screen, all);

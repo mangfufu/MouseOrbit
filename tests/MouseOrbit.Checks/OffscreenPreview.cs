@@ -1,4 +1,4 @@
-﻿using MouseOrbit;
+using MouseOrbit;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -21,6 +21,7 @@ internal static class OffscreenPreview
         for (int i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
         {
             var child = VisualTreeHelper.GetChild(node, i);
+            if (child is UIElement element && element.Visibility != Visibility.Visible) continue;
             if (child is T match) yield return match;
             foreach (var nested in Descendants<T>(child)) yield return nested;
         }

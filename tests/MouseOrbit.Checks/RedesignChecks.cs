@@ -72,7 +72,17 @@ internal static class RedesignChecks
         press.Begin(3000, false);
         Check(press.End(3300, 0, 0) == TriggerRelease.Wheel, "delayed timer cannot turn a hold into panel");
         press.Begin(4000, false);
-        Check(press.TryHold(4020, 40, 0) && press.End(4060, 80, 0) == TriggerRelease.Wheel, "fast flick keeps original wheel path");
+        Check(press.TryHold(4020, 80, 0) && press.End(4060, 80, 0) == TriggerRelease.Wheel, "fast flick beyond wheel dead zone keeps original wheel path");
+        foreach (var motion in new[] { new Point(12, 0), new Point(40, 0), new Point(30, 30), new Point(-40, -20) })
+        {
+            press.Begin(4100, false);
+            Check(!press.TryHold(4140, motion.X, motion.Y) && press.End(4200, motion.X, motion.Y) == TriggerRelease.Panel,
+                "side-button tap with incidental movement opens panel: " + motion);
+        }
+        Check(TriggerButtons.Matches("XButton1", 0x20B, 1u << 16) && !TriggerButtons.Matches("XButton1", 0x20B, 2u << 16), "back side button remains distinct from forward side button");
+        Check(!TriggerButtons.Matches("XButton2", 0x20C, 2u << 16) && !TriggerButtons.Matches("XButton2", 0x207, 0), "side-button binding ignores releases and middle button");
+        Check(TriggerButtons.Matches("XButton2", 0x20B, 2u << 16) && !TriggerButtons.Matches("XButton2", 0x20B, 1u << 16), "explicit forward-button binding remains exclusive");
+        Check(TriggerButtons.Matches("Middle", 0x207, 0) && !TriggerButtons.Matches("Middle", 0x20B, 1u << 16), "explicit middle-button binding remains exclusive");
         press.Begin(5000, false); press.TryHold(5300, 80, 0); int beforeCancel = press.Version; press.Cancel();
         Check(press.Version != beforeCancel && press.End(5400, 80, 0) == TriggerRelease.None, "right click or focus cancellation cannot reopen on release");
         press.Begin(6000, true); Check(press.End(6100, 0, 0) == TriggerRelease.None, "tap on open panel dismisses");

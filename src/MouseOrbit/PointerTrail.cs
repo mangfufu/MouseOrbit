@@ -7,7 +7,8 @@ internal sealed class PointerPath
     private readonly List<Point> _points = new();
     public IReadOnlyList<Point> Points => _points;
     public int Version { get; private set; }
-    public void Begin(Point point) { _points.Clear(); _points.Add(point); Version++; }
+    public Rect Bounds { get; private set; } = Rect.Empty;
+    public void Begin(Point point) { _points.Clear(); _points.Add(point); Bounds = new Rect(point, point); Version++; }
     public void Add(Point point)
     {
         if (_points.Count == 0) return;
@@ -16,49 +17,70 @@ internal sealed class PointerPath
         {
             var reduced = _points.Where((_, i) => i % 2 == 0).ToArray(); _points.Clear(); _points.AddRange(reduced);
         }
-        _points.Add(point); Version++;
+        _points.Add(point); var bounds = Bounds; bounds.Union(point); Bounds = bounds; Version++;
     }
-    public void Clear() { _points.Clear(); Version++; }
+    public void Clear() { _points.Clear(); Bounds = Rect.Empty; Version++; }
 }
 
 internal sealed class PointerTrail : IDisposable
 {
     public PointerPath Path { get; } = new();
-    private readonly Dictionary<string, (Window Window, PointerTrailVisual View)> _windows = new();
+    private readonly Dictionary<string, LayeredSurface> _windows = new();
     private int _rendered = -1;
-    public void Refresh()
+    public void Prepare()
+    {
+        foreach (var screen in System.Windows.Forms.Screen.AllScreens)
+            Overlay(screen.DeviceName).Paint(new Rect(screen.Bounds.Left, screen.Bounds.Top, 128, 128), graphics =>
+            {
+                using var pen = new System.Drawing.Pen(System.Drawing.Color.Gray, 2.5f);
+                graphics.DrawLine(pen, 16, 16, 80, 80);
+            }, false);
+    }
+    private LayeredSurface Overlay(string name)
+    {
+        if (_windows.TryGetValue(name, out var existing)) return existing;
+        var overlay = new LayeredSurface("MouseOrbit · 轨迹"); _windows.Add(name, overlay); return overlay;
+    }
+    internal static Rect SurfaceBounds(Rect stroke, System.Drawing.Rectangle screen)
+    {
+        stroke.Inflate(16, 16); stroke.Intersect(new Rect(screen.X, screen.Y, screen.Width, screen.Height));
+        if (stroke.IsEmpty) return Rect.Empty;
+        const int block = 128;
+        double x = screen.Left + Math.Floor((stroke.Left - screen.Left) / block) * block;
+        double y = screen.Top + Math.Floor((stroke.Top - screen.Top) / block) * block;
+        double right = Math.Min(screen.Right, screen.Left + Math.Ceiling((stroke.Right - screen.Left) / block) * block);
+        double bottom = Math.Min(screen.Bottom, screen.Top + Math.Ceiling((stroke.Bottom - screen.Top) / block) * block);
+        return new Rect(x, y, Math.Max(1, right - x), Math.Max(1, bottom - y));
+    }
+    public void Refresh(Color? inkColor = null)
     {
         if (Path.Version == _rendered || Path.Points.Count < 2) return;
         _rendered = Path.Version;
-        var points = Path.Points.ToArray();
-        var extent = new Rect(new Point(points.Min(p => p.X), points.Min(p => p.Y)), new Point(points.Max(p => p.X), points.Max(p => p.Y)));
-        extent.Inflate(5, 5);
         foreach (var screen in System.Windows.Forms.Screen.AllScreens)
         {
-            var bounds = screen.Bounds;
-            if (!extent.IntersectsWith(new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height))) continue;
-            if (!_windows.TryGetValue(screen.DeviceName, out var overlay))
+            var bounds = SurfaceBounds(Path.Bounds, screen.Bounds);
+            if (bounds.IsEmpty)
             {
-                var view = new PointerTrailVisual();
-                var window = new Window
-                {
-                    Title = "MouseOrbit · 轨迹", WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize,
-                    AllowsTransparency = true, Background = Brushes.Transparent, Content = view,
-                    ShowActivated = false, ShowInTaskbar = false, Topmost = true, IsHitTestVisible = false
-                };
-                window.SourceInitialized += (_, _) => Native.OverlayStyle(window, true);
-                overlay = (window, view); _windows.Add(screen.DeviceName, overlay);
+                if (_windows.TryGetValue(screen.DeviceName, out var old)) old.Hide();
+                continue;
             }
-            Native.Position(overlay.Window, bounds.Left, bounds.Top);
-            double scale = Native.GetDpiForWindow(new System.Windows.Interop.WindowInteropHelper(overlay.Window).Handle) / 96d;
-            overlay.Window.Width = bounds.Width / scale; overlay.Window.Height = bounds.Height / scale;
-            overlay.View.Origin = new Point(bounds.Left, bounds.Top); overlay.View.Scale = scale;
-            overlay.View.Points = points; overlay.View.InvalidateVisual();
-            if (!overlay.Window.IsVisible) overlay.Window.Show();
+            var overlay = Overlay(screen.DeviceName);
+            overlay.Move((int)bounds.X, (int)bounds.Y);
+            double scale = Math.Max(1, Native.GetDpiForWindow(overlay.Handle) / 96d);
+            var points = Path.Points.Select(p => new System.Drawing.PointF((float)(p.X - bounds.X), (float)(p.Y - bounds.Y))).ToArray();
+            var accent = inkColor ?? Palette.Accent.Color;
+            overlay.Paint(bounds, graphics =>
+            {
+                using var halo = new System.Drawing.Pen(System.Drawing.Color.FromArgb(65, 20, 20, 20), (float)(5 * scale));
+                using var ink = new System.Drawing.Pen(System.Drawing.Color.FromArgb(accent.A, accent.R, accent.G, accent.B), (float)(2.5 * scale));
+                halo.StartCap = halo.EndCap = ink.StartCap = ink.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+                halo.LineJoin = ink.LineJoin = System.Drawing.Drawing2D.LineJoin.Round;
+                graphics.DrawLines(halo, points); graphics.DrawLines(ink, points);
+            });
         }
     }
-    public void Clear() { Path.Clear(); foreach (var overlay in _windows.Values) overlay.Window.Hide(); }
-    public void Dispose() { foreach (var overlay in _windows.Values) overlay.Window.Close(); _windows.Clear(); }
+    public void Clear() { Path.Clear(); foreach (var overlay in _windows.Values) overlay.Hide(); }
+    public void Dispose() { foreach (var overlay in _windows.Values) overlay.Dispose(); _windows.Clear(); }
 }
 
 internal sealed class PointerTrailVisual : FrameworkElement

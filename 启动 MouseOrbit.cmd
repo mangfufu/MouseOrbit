@@ -1,19 +1,11 @@
 @echo off
+setlocal
 cd /d "%~dp0"
-if exist "artifacts\MouseOrbit-Pixel\MouseOrbit.exe" (
-  start "" "artifacts\MouseOrbit-Pixel\MouseOrbit.exe"
-  exit /b
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Start-MouseOrbit.ps1" %*
+set "launchResult=%errorlevel%"
+if not "%launchResult%"=="0" (
+  echo.
+  echo MouseOrbit could not start. See the error and log path above.
+  pause
 )
-if exist "artifacts\MouseOrbit-B-Recent\MouseOrbit.exe" (
-  start "" "artifacts\MouseOrbit-B-Recent\MouseOrbit.exe"
-  exit /b
-)
-if exist "artifacts\MouseOrbit-B\MouseOrbit.exe" (
-  start "" "artifacts\MouseOrbit-B\MouseOrbit.exe"
-  exit /b
-)
-if exist "artifacts\MouseOrbit\MouseOrbit.exe" (
-  start "" "artifacts\MouseOrbit\MouseOrbit.exe"
-  exit /b
-)
-dotnet run --project "src\MouseOrbit\MouseOrbit.csproj" -c Release
+exit /b %launchResult%
