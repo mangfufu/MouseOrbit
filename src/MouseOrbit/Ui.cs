@@ -47,18 +47,19 @@ internal static class Ui
         menu.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("/MouseOrbit;component/Controls.xaml", UriKind.Relative) });
         return menu;
     }
-    internal static void Enter(FrameworkElement view, double distance = 6)
+    internal static void Enter(FrameworkElement view, double distance = 6, Point? origin = null)
     {
         if (!SystemParameters.ClientAreaAnimation) return;
-        view.RenderTransformOrigin = new Point(.5, .5);
+        view.RenderTransformOrigin = origin ?? new Point(.5, .5);
         var shift = new TranslateTransform(); var scale = new ScaleTransform(1, 1); var fold = new SkewTransform();
         var transforms = new TransformGroup(); transforms.Children.Add(scale); transforms.Children.Add(fold); transforms.Children.Add(shift); view.RenderTransform = transforms;
-        DoubleAnimation Settle(double from, double to) => new(from, to, TimeSpan.FromMilliseconds(145)) { FillBehavior = FillBehavior.Stop, EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+        DoubleAnimation Settle(double from, double to) => new(from, to, TimeSpan.FromMilliseconds(340)) { FillBehavior = FillBehavior.Stop, EasingFunction = new FluidEase() };
         shift.BeginAnimation(TranslateTransform.YProperty, Settle(distance, 0));
-        if (!Palette.Spatial)
-        { scale.BeginAnimation(ScaleTransform.ScaleYProperty, Settle(.955, 1)); fold.BeginAnimation(SkewTransform.AngleXProperty, Settle(1.6, 0)); }
-        view.Opacity = 1; view.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(.2, 1, TimeSpan.FromMilliseconds(120)) { FillBehavior = FillBehavior.Stop });
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty, Settle(.965, 1)); scale.BeginAnimation(ScaleTransform.ScaleYProperty, Settle(.94, 1));
+        view.Opacity = 1; view.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(.15, 1, TimeSpan.FromMilliseconds(170)) { FillBehavior = FillBehavior.Stop });
     }
+    internal static void HeightTo(FrameworkElement view, double target, bool expanding, int delay = 0, Action? completed = null)
+        => FluidHeight.To(view, target, expanding, delay, completed);
     internal static void StopEntrance(FrameworkElement view)
     {
         view.BeginAnimation(UIElement.OpacityProperty, null); view.Opacity = 1;
@@ -101,6 +102,13 @@ internal static class Ui
         try { using var icon = System.Drawing.Icon.FromHandle(handle); return (System.Drawing.Icon)icon.Clone(); }
         finally { DestroyIcon(handle); }
     }
+}
+
+internal sealed class FluidEase : EasingFunctionBase
+{
+    protected override double EaseInCore(double t) => t >= 1 ? 1 : 1 - Math.Exp(-8 * t) * (Math.Cos(9 * t) + 8d / 9 * Math.Sin(9 * t));
+    protected override Freezable CreateInstanceCore() => new FluidEase();
+    internal FluidEase() { EasingMode = EasingMode.EaseIn; }
 }
 
 // Quiet optical plane: two clipped corners and a short crease highlight.

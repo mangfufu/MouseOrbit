@@ -96,8 +96,11 @@ internal static class OffscreenPreview
     {
         _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
 
+        PreloadChecks.RunStartup();
+        MemoryChecks.Run();
         SpatialInteractionChecks.Run();
         AppearanceQualityChecks.Run();
+        FluidDynamicsChecks.Run();
         ParticleMotionChecks.Run();
         Directory.CreateDirectory(Output); Palette.SetTheme(false);
         var launcher = new Launcher(); launcher.Refresh();
@@ -129,9 +132,8 @@ internal static class OffscreenPreview
         Descendants<Button>(root).First(b => System.Windows.Automation.AutomationProperties.GetName(b).StartsWith("从常用移除：")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
         Render(root, (int)quick.Width, (int)quick.Height);
         if (Descendants<EntryIcon>(root).Count() != apps.Length - 1) throw new Exception("Frequent remove must update immediately");
-        bool wheelRequested = false; quick.ToolRequested += id => wheelRequested = id == "wheel";
-        var wheelItem = quick.CreateMenu().Items.OfType<MenuItem>().Single(item => item.Header as string == "设置").Items.OfType<MenuItem>().Single(item => item.Header as string == "轮盘");
-        wheelItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent)); if (!wheelRequested) throw new Exception("Wheel remains available from mouse menu");
+        if (quick.CreateMenu().Items.OfType<MenuItem>().Single(item => item.Header as string == "设置").Items.OfType<MenuItem>().Any(item => item.Header as string == "轮盘"))
+            throw new Exception("The hold-to-open wheel must not be duplicated in the panel menu");
         foreach (var theme in ThemePresets.All)
         {
             Palette.Apply(theme.Id); quick.SetWindows(groups); quick.SetEntries(new() { ["frequent"] = apps, ["recent"] = apps });
@@ -222,6 +224,8 @@ internal static class OffscreenPreview
             var bitmap = new RenderTargetBitmap(1040, 780, 96, 96, PixelFormats.Pbgra32); bitmap.Render(board); Save(bitmap, "particle-reference-comparison.png");
         }
         Palette.SetBackdropDark(false); quick.SetWindows(groups);
+        var windowPreview = new WindowPreviewWindow(); windowPreview.SetSource(groups[0].Windows[0]);
+        Save(Render((FrameworkElement)windowPreview.Content, 300, 210), "window-preview.png"); windowPreview.Close();
         Palette.Apply("typefield"); root = (FrameworkElement)quick.Content;
         if (quick.CreateMenu().Items.OfType<MenuItem>().Any(item => item.Header as string == "样式")) throw new Exception("Single-style menu must not offer a style picker");
         Palette.SetTheme(false);

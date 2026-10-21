@@ -79,7 +79,7 @@ internal sealed class PointerTrail : IDisposable
             });
         }
     }
-    public void Clear() { Path.Clear(); foreach (var overlay in _windows.Values) overlay.Hide(); }
+    public void Clear() { Path.Clear(); foreach (var overlay in _windows.Values) overlay.ReleaseIdleBuffer(); }
     public void Dispose() { foreach (var overlay in _windows.Values) overlay.Dispose(); _windows.Clear(); }
 }
 

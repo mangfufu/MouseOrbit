@@ -6,7 +6,7 @@
   <Style TargetType="TextBlock"><Setter Property="Foreground" Value="{DynamicResource Ink}"/></Style>
 </ResourceDictionary>
  </Window.Resources>
- <local:SurfacePanel Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Edge}" BorderThickness="1" CornerRadius="10" Margin="8">
+ <local:ParticlePanel Background="{DynamicResource Surface}" CornerRadius="20" Margin="8">
   <Grid>
    <Grid.RowDefinitions><RowDefinition Height="72"/><RowDefinition Height="*"/></Grid.RowDefinitions>
    <Grid Background="Transparent" MouseLeftButtonDown="Title_Drag" Margin="24,0,16,0">
@@ -17,7 +17,7 @@
     </StackPanel>
    </Grid>
    <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="176"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-    <Border Background="{DynamicResource Chrome}" CornerRadius="8" Margin="12,0,0,12"><Grid Margin="12,16,12,12">
+    <Border Background="Transparent" CornerRadius="8" Margin="12,0,0,12"><Grid Margin="12,16,12,12">
      <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
      <StackPanel>
       <Button x:Name="LibraryNav" Click="AssistantNav_Click" Background="{DynamicResource Selected}" Margin="0,0,0,6"><StackPanel Orientation="Horizontal"><local:UiIcon Kind="assistant" Width="16" Height="16" Margin="0,0,9,0"/><TextBlock Text="应用与文件"/></StackPanel></Button>
@@ -79,7 +79,7 @@
        <ListBox.ItemsPanel><ItemsPanelTemplate><local:TileVirtualizingPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
        <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="Padding" Value="0"/><Setter Property="Focusable" Value="False"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter/></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
        <ListBox.ItemTemplate><DataTemplate>
-        <Border Width="136" Height="130" Margin="0,0,8,10" Background="Transparent" CornerRadius="8"><Grid>
+        <local:ParticleMenuPlate Width="136" Height="130" Margin="0,0,8,10" Background="Transparent" CornerRadius="8"><Grid>
          <Button Tag="{Binding}" Click="Launch_Click" Background="Transparent" Padding="12" ToolTip="{Binding Name}" AutomationProperties.Name="{Binding Name}">
           <StackPanel Width="104"><local:EntryIcon Entry="{Binding}" Width="36" Height="36" Margin="0,8,0,16"/><TextBlock Text="{Binding Name}" FontSize="12" TextTrimming="CharacterEllipsis" TextAlignment="Center"/></StackPanel>
          </Button>
@@ -91,7 +91,7 @@
           <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Setter Property="Visibility" Value="Collapsed"/><Setter Property="Opacity" Value="0"/><Style.Triggers><DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True"><Setter Property="Opacity" Value="0.85"/></DataTrigger><DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="recent"><Setter Property="Visibility" Value="Visible"/><Setter Property="ToolTip" Value="从最近移除"/></DataTrigger><DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="frequent"><Setter Property="Visibility" Value="Visible"/><Setter Property="ToolTip" Value="从常用移除"/></DataTrigger></Style.Triggers></Style></Button.Style>
           <local:UiIcon Kind="close" Width="12" Height="12"/>
          </Button>
-        </Grid></Border>
+        </Grid></local:ParticleMenuPlate>
        </DataTemplate></ListBox.ItemTemplate>
       </ListBox>
       <TextBlock x:Name="EmptyText" Foreground="{DynamicResource Muted}" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"/>
@@ -100,5 +100,5 @@
     </Grid>
    </Grid>
   </Grid>
- </local:SurfacePanel>
+ </local:ParticlePanel>
 </Window>

@@ -12,7 +12,7 @@ internal sealed class IconCache
     private readonly LinkedList<string> _order = new();
     private readonly object _gate = new();
     private readonly int _capacity;
-    internal IconCache(int capacity = 2048) => _capacity = Math.Max(1, capacity);
+    internal IconCache(int capacity = 256) => _capacity = Math.Max(1, capacity);
     internal Task<ImageSource?> Get(string key, Func<Task<ImageSource?>> load)
     {
         Item item;

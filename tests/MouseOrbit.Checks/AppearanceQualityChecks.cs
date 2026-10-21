@@ -52,8 +52,9 @@ internal static class AppearanceQualityChecks
                 var view = panel.SpatialView!;
                 view.FocusRow(((StackPanel)view.Flow.Content).Children.OfType<Button>().First(), false);
                 byte[] highlighted = Pixels(OffscreenPreview.Render((FrameworkElement)panel.Content, 254, 376));
-                Check(Enumerable.Range(238, 6).Sum(x => Enumerable.Range(18, 32).Count(y => highlighted[(y * 254 + x) * 4 + 3] >= 10)) >= 8,
-                    "the settled row contour reaches its right end without being clipped by the old content width");
+                Check(Enumerable.Range(210, 23).Sum(x => Enumerable.Range(18, 32).Count(y => highlighted[(y * 254 + x) * 4 + 3] >= 8)) >= 8 &&
+                    Enumerable.Range(18, 32).All(y => highlighted[(y * 254 + 243) * 4 + 3] < 8),
+                    "the particle tail extends through the option and feathers out before its boundary");
                 panel.Close();
                 var name = "长名称窗口 Chrome";
                 var protectedLabel = Pixels(OffscreenPreview.Render(new ParticleLabel { Text = name, Foreground = Palette.Ink, FontSize = 12 }, 180, 22));
@@ -62,6 +63,9 @@ internal static class AppearanceQualityChecks
                 var field = new ParticleField(71);
                 var rest = Pixels(OffscreenPreview.Render(field, 236, 60)); field.SetActive(true, false);
                 var settled = Pixels(OffscreenPreview.Render(field, 236, 60));
+                double Mean(int left, int top, int width, int height) => Enumerable.Range(left, width).Sum(x => Enumerable.Range(top, height).Sum(y => (double)settled[(y * 236 + x) * 4 + 3])) / (width * height);
+                Check(Mean(60, 20, 130, 20) > Mean(60, 4, 130, 7) * 1.4 && Mean(60, 20, 130, 20) > Mean(60, 50, 130, 7) * 1.4,
+                    "grain disperses outward from the row interior without a denser geometric outline");
                 int Visible(byte[] bytes) => Enumerable.Range(0, bytes.Length / 4).Count(i => bytes[i * 4 + 3] >= 16);
                 Check(Visible(settled) > Visible(rest) * 2, "settled selection retains a visible, denser particle surface rather than fading to a few dots");
                 field.Stop();
@@ -69,9 +73,9 @@ internal static class AppearanceQualityChecks
                 for (int i = 0; i < 8; i++)
                 {
                     var p = SpatialWheel.LabelPosition(i);
-                    Check(SpatialWheel.TypefieldPlane.FillContains(new Point(p.X - 33, p.Y + 15)) && SpatialWheel.TypefieldPlane.FillContains(new Point(p.X + 33, p.Y + 15)), "K wheel protects both ends of each command label: " + i);
+                    Check(SpatialWheel.Hit(AppearanceLayout.Typefield, p.X - 210 - 33, p.Y - 210 + 15) == i && SpatialWheel.Hit(AppearanceLayout.Typefield, p.X - 210 + 33, p.Y - 210 + 15) == i, "particle wheel retains the entire visible command label inside its real hit region: " + i);
                 }
-                Check(!SpatialWheel.TypefieldPlane.FillContains(new Point(210, 210)), "K wheel keeps its cancel center clear");
+                Check(SpatialWheel.Hit(AppearanceLayout.Typefield, 0, 0) == -1, "particle wheel keeps its cancel center clear");
             }
         }
         Check(BackdropTone.IsDark(Enumerable.Repeat(Colors.Black, 30).Concat(Enumerable.Repeat(Colors.White, 6))) &&
@@ -80,7 +84,7 @@ internal static class AppearanceQualityChecks
         using (var host = new System.Windows.Interop.HwndSource(new System.Windows.Interop.HwndSourceParameters("Particle lifecycle fixture") { ParentWindow = new nint(-3), Width = 236, Height = 60 }))
         {
             var particles = new ParticleField(42); host.RootVisual = particles;
-            OffscreenPreview.Render(particles, 236, 60); particles.SetActive(true);
+            OffscreenPreview.Render(particles, 236, 60); particles.SetActive(true); particles.Pulse();
             Check(particles.MotionRunning == (SystemParameters.ClientAreaAnimation && particles.IsLoaded && particles.IsVisible), "particle pulse respects visibility and the system motion preference");
             var frame = new System.Windows.Threading.DispatcherFrame();
             var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(240) };
@@ -98,6 +102,10 @@ internal static class AppearanceQualityChecks
         Palette.SetBackdropDark(false);
         Check(!symbolBefore.SequenceEqual(Pixels(OffscreenPreview.Render(symbol, 24, 24))), "unloaded symbol follows adaptive tone changes");
         Check(!entryBefore.SequenceEqual(Pixels(OffscreenPreview.Render(entry, 24, 24))), "preloaded command icon follows adaptive tone changes");
+        var particleIcon = new ParticleIcon("settings"); var iconLight = Pixels(OffscreenPreview.Render(particleIcon, 24, 24));
+        Palette.SetBackdropDark(true);
+        Check(!iconLight.SequenceEqual(Pixels(OffscreenPreview.Render(particleIcon, 24, 24))), "particle menu and wheel symbols follow adaptive tone changes while unloaded");
+        Palette.SetBackdropDark(false);
         Palette.Apply(original);
         Console.WriteLine($"PASS: {count} appearance quality checks (black/white contrast, long labels, hidden icon updates)");
     }

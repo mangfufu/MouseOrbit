@@ -39,10 +39,14 @@ internal static class SpatialInteractionChecks
                 panel.SetWindows(groups); panel.SetEntries(new() { ["frequent"] = entries, ["recent"] = entries }); Render();
                 var view = panel.SpatialView!;
                 Check(view != null, "spatial style owns a separate interaction view: " + id);
+                var warmedRow = Button("应用 0");
+                panel.SetWindows(groups.Select(g => g with { Windows = g.Windows.ToArray() }).ToArray());
+                panel.SetEntries(new() { ["frequent"] = entries.ToArray(), ["recent"] = entries.ToArray() }); Render();
+                Check(ReferenceEquals(warmedRow, Button("应用 0")), "unchanged background snapshots retain warmed rows instead of allocating another visual tree");
                 Check(!panel.CreateMenu().Items.OfType<MenuItem>().Any(m => m.Header as string == "样式"), "single-style menu has no redundant appearance selector");
                 var menu = panel.CreateMenu();
                 Check(menu.Items.OfType<MenuItem>().Select(m => m.Header as string).SequenceEqual(new[] { "窗口", "常用", "最近", "截图 / GIF", "设置" }), "particle wing follows the five-entry concept structure");
-                Check(menu.Items.OfType<MenuItem>().Last().Items.OfType<MenuItem>().Select(m => m.Header as string).SequenceEqual(new[] { "轮盘", "专注模式", "管理", "关闭" }), "secondary actions remain accessible under settings");
+                Check(menu.Items.OfType<MenuItem>().Last().Items.OfType<MenuItem>().Select(m => m.Header as string).SequenceEqual(new[] { "专注模式", "管理", "关闭" }), "settings has no duplicate wheel launcher");
                 if (id == "typefield")
                 {
                     double Left(FrameworkElement item) => item.TransformToAncestor(view!).Transform(new Point()).X;
@@ -62,6 +66,12 @@ internal static class SpatialInteractionChecks
                 panel.CreateMenu().Items.OfType<MenuItem>().Single(m => m.Header as string == "截图 / GIF").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
                 Check(tool == "capture", "merged menu preserves the shared capture entry: " + id);
                 var parent = Button("应用 0"); var before = parent.TransformToAncestor((Visual)panel.Content).Transform(new Point());
+                Check(view.WindowForRow(parent) == window && parent.ToolTip == null, "group preview targets its most recent window and suppresses the title-only tooltip");
+                SwitchWindow? previewTarget = null; int previewDismissed = 0;
+                view.PreviewRequested += (target, _) => previewTarget = target; view.PreviewDismissed += () => previewDismissed++;
+                view.FocusRow(parent, false);
+                parent.RaiseEvent(new System.Windows.Input.MouseEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0) { RoutedEvent = System.Windows.Input.Mouse.MouseLeaveEvent });
+                Check(previewTarget == window && previewDismissed > 0, "hover preview requests the exact window and leaving its row dismisses it");
                 var hit = VisualTreeHelper.HitTest(parent, new Point(2, 2))?.VisualHit;
                 while (hit != null && hit != parent) hit = VisualTreeHelper.GetParent(hit);
                 Check(hit == parent, "the full choice area responds, including the space outside its icon and lettering: " + id);
@@ -70,6 +80,8 @@ internal static class SpatialInteractionChecks
                 Check(view!.State.Expanded == "g0" && Button("应用 1") != null, "expanding keeps the application context visible: " + id);
                 Check(before == after, "expanding preserves the clicked application's screen location: " + id);
                 Check(Button("准确目标窗口") != null && Button("第三窗口") != null, "child windows are directly addressable: " + id);
+                Check(view.WindowForRow(Button("第三窗口"))?.Handle == stale.Handle && Button("第三窗口").ToolTip == null,
+                    "expanded child preview retains the exact child identity without a text tooltip");
                 if (id == "typefield")
                 {
                     Check(Children<UiIcon>(Button("应用 0")).Any(icon => icon.RenderTransform is RotateTransform { Angle: 90 }), "K expanded group has a persistent downward indicator");
@@ -86,7 +98,7 @@ internal static class SpatialInteractionChecks
                 BlankClick(); Check(dismissed == 1, "blank click dismisses after context is collapsed: " + id);
                 panel.ScrollWheel(-120); Render();
                 {
-                    var frame = new DispatcherFrame(); var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
+                    var frame = new DispatcherFrame(); var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
                     timer.Tick += (_, _) => { timer.Stop(); frame.Continue = false; }; timer.Start(); Dispatcher.PushFrame(frame); Render();
                     Check(view.State.Page == 0 && Math.Abs(view.Flow.VerticalOffset - SpatialSwitcherView.RowHeight) < 1, "K scrolls one actual row in a continuous text flow rather than J group paging");
                 }

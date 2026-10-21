@@ -87,7 +87,6 @@ internal static class UiPerformanceChecks
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
             var launcher = (Launcher)typeof(MainWindow).GetField("_launcher", flags)!.GetValue(cachedManager)!;
             ((List<DesktopEntry>)launcher.Entries).AddRange(Enumerable.Range(0, 800).Select(i => new DesktopEntry("cached-app:" + i, "应用 " + i, "", "app", "unused", "")));
-            typeof(MainWindow).GetField("_lastIndexRefresh", flags)!.SetValue(cachedManager, Environment.TickCount64);
             var prepare = Stopwatch.StartNew(); cachedManager.PrepareView(); prepare.Stop(); cachedManager.Show(); Pump();
             Console.WriteLine($"PERF: manager startup preparation (800 apps, all pages): {prepare.Elapsed.TotalMilliseconds:F2} ms");
             var samples = new List<double>();

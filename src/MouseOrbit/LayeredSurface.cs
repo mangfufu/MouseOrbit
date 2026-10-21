@@ -86,6 +86,13 @@ internal sealed class LayeredSurface : System.Windows.Forms.NativeWindow, IDispo
         image.Freeze(); return image;
     }
     internal void Hide() { if (Visible) ShowWindow(Handle, 0); Visible = false; }
+    internal void ReleaseIdleBuffer()
+    {
+        Hide();
+        // Keep the tiny preheated DIB; a long, cross-screen gesture must not
+        // leave a screen-sized drawing buffer resident after the stroke ends.
+        if (PixelArea > 128 * 128) ReleaseBitmap();
+    }
     private void ReleaseBitmap()
     {
         _graphics?.Dispose(); _graphics = null; _bitmap?.Dispose(); _bitmap = null;

@@ -24,8 +24,10 @@ public partial class MainWindow : Window
     private bool _ready;
     private readonly Preferences _viewSettings;
     // Layout-only constructor for the designer and offscreen rendering. No global input is installed.
-    internal MainWindow(Preferences settings)
+    internal MainWindow(Preferences settings) : this(settings, new LauncherSession(new Launcher())) { }
+    private MainWindow(Preferences settings, LauncherSession session)
     {
+        _session = session; _launcher = session.Launcher;
         _controller = null!;
         _viewSettings = settings;
         Palette.Resources(Resources);
@@ -33,6 +35,7 @@ public partial class MainWindow : Window
         Ui.Install(this);
         Palette.Changed += ThemeChanged;
         Closed += (_, _) => Palette.Changed -= ThemeChanged;
+        IsVisibleChanged += (_, _) => Preview.SetPresented(IsVisible);
         _wheelDraft = Enumerable.Range(0, 3).Select(p => settings.GetWheel(p).ToArray()).ToArray();
         Preview.Settings = settings;
         TriggerCombo.SelectedIndex = settings.Trigger switch { "XButton2" => 1, "Middle" => 2, _ => 0 };
@@ -46,20 +49,16 @@ public partial class MainWindow : Window
             _gestureCombos[pair.Key] = AddRow(GestureRows, GestureRecognizer.Arrows(pair.Key), pair.Value);
         LoadFocusApps();
     }
-    internal MainWindow(OrbitController controller) : this(controller.Settings)
+    internal MainWindow(OrbitController controller) : this(controller.Settings, controller.LauncherSession)
     {
         _controller = controller;
         StatusText.Text = Preferences.LoadWarning ?? "";
         controller.Status += UpdateStatus;
         Loaded += (_, _) => Dispatcher.BeginInvoke(() => { Focus(); ContentScroll.ScrollToTop(); }, System.Windows.Threading.DispatcherPriority.ContextIdle);
-        Closing += (_, e) => { e.Cancel = true; Hide(); };
-        controller.QuickEntries = BuildQuickEntries;
-        controller.RemoveRecentEntry = RemoveRecentEntry;
-        controller.RemoveFrequentEntry = RemoveFrequentEntry;
-        BuildQuickEntries();
+        _session.Changed += SessionChanged;
+        Closed += (_, _) => { controller.Status -= UpdateStatus; _session.Changed -= SessionChanged; };
         IsVisibleChanged += (_, _) => { if (IsVisible && _resultsDirty) RefreshResults(); };
-        controller.EntryOpened += entry => RecordQuickUsage(entry);
-        _usageTimer.Tick += (_, _) => { ObserveUsage(); RefreshIndexIfStale(); PrepareChangedQuickPage(); }; _usageTimer.Start();
+        _resultsDirty = true;
     }
     private void LoadWheelPage(int page)
     {
@@ -124,7 +123,7 @@ public partial class MainWindow : Window
         }
     }
     private void Quit_Click(object sender, RoutedEventArgs e) => Application.Current.Shutdown();
-    private void Hide_Click(object sender, RoutedEventArgs e) => Hide();
+    private void Hide_Click(object sender, RoutedEventArgs e) => Close();
     private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
     private void Title_Drag(object sender, MouseButtonEventArgs e)
     {

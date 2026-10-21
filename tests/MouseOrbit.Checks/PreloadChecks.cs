@@ -10,25 +10,24 @@ internal static class PreloadChecks
     {
         var previous = SynchronizationContext.Current;
         SynchronizationContext.SetSynchronizationContext(new System.Windows.Threading.DispatcherSynchronizationContext(System.Windows.Threading.Dispatcher.CurrentDispatcher));
-        var manager = new MainWindow(new Preferences());
+        using var session = new LauncherSession(new Launcher());
         try
         {
-            var watch = System.Diagnostics.Stopwatch.StartNew(); var task = manager.InitializeLauncher();
+            int windowsBefore = System.Windows.Application.Current.Windows.Count;
+            var watch = System.Diagnostics.Stopwatch.StartNew(); var task = session.RefreshAsync();
             var frame = new System.Windows.Threading.DispatcherFrame();
             var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(10) };
             timer.Tick += (_, _) => { if (task.IsCompleted || watch.Elapsed > TimeSpan.FromSeconds(30)) frame.Continue = false; };
             timer.Start(); System.Windows.Threading.Dispatcher.PushFrame(frame); timer.Stop();
             if (!task.IsCompleted) throw new Exception("Startup preload exceeded the test timeout");
             task.GetAwaiter().GetResult(); double load = watch.Elapsed.TotalMilliseconds;
-            var launcher = (Launcher)typeof(MainWindow).GetField("_launcher", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(manager)!;
-            var entries = launcher.Entries.Where(entry => entry.Kind != "command").ToArray();
-            if (entries.Length == 0 || entries.Any(entry => !ShellIcons.TryGet(entry, out _))) throw new Exception("FAIL: startup published entries before their icon reads completed");
-            long before = ShellIcons.QueuedReads; manager.PrepareView();
-            if (ShellIcons.QueuedReads != before) throw new Exception("FAIL: first page preparation started additional application icon reads");
-            Console.WriteLine($"STARTUP: {entries.Length} real app/file/window icons read before publication in {load:F1} ms; first page layout queued 0 additional icon reads");
-            Console.WriteLine("PASS: 2 actual startup checks (complete icon preload, no shell reads during first layout)");
+            var quick = session.BuildQuickEntries().Values.SelectMany(entries => entries).Where(entry => entry.Kind != "command").ToArray();
+            if (quick.Any(entry => !ShellIcons.TryGet(entry, out _))) throw new Exception("FAIL: quick entries were not warmed before startup completed");
+            if (System.Windows.Application.Current.Windows.Count != windowsBefore) throw new Exception("FAIL: background launcher created a management window");
+            Console.WriteLine($"STARTUP: {quick.Length} quick-entry icons ready in {load:F1} ms; management windows created: 0");
+            Console.WriteLine("PASS: 2 actual startup checks (bounded icon preload, no management UI)");
         }
-        finally { manager.Close(); SynchronizationContext.SetSynchronizationContext(previous); }
+        finally { SynchronizationContext.SetSynchronizationContext(previous); }
     }
     internal static void Run()
     {
@@ -94,8 +93,20 @@ internal static class PreloadChecks
             Check(launcher.Entries.SequenceEqual(new[] { old }), "reading new applications never mutates the published launcher list");
             launcher.ApplyScan(candidates);
             Check(launcher.Entries.SequenceEqual(candidates), "the prepared launcher scan is published explicitly after preloading");
+            launcher.ApplyScan(new[] { old });
+            using var session = new LauncherSession(launcher); int changes = 0;
+            session.Changed += () => changes++;
+            session.Record(old);
+            var quick = session.BuildQuickEntries();
+            Check(quick["recent"].Any(e => e.Id == old.Id) && quick["frequent"].Any(e => e.Id == old.Id), "headless usage recording updates recent and frequent without constructing a management window");
+            Check(session.Remove(old, true) && !session.BuildQuickEntries()["frequent"].Any(e => e.Id == old.Id), "headless frequent removal immediately updates side-panel entries");
+            Check(session.Remove(old, false) && !session.BuildQuickEntries()["recent"].Any(e => e.Id == old.Id), "headless recent removal immediately updates side-panel entries");
+            session.Record(old);
+            Check(session.BuildQuickEntries()["recent"].Any(e => e.Id == old.Id) && !session.BuildQuickEntries()["frequent"].Any(e => e.Id == old.Id), "reopening restores recency while respecting removal from frequent");
+            var restored = new Launcher(directory); restored.ApplyScan(new[] { old });
+            Check(restored.Recent().Any(e => e.Id == old.Id) && restored.IsHiddenFromFrequent(old) && changes == 4, "usage and removal persist across sessions without any management UI");
         }
-        finally { System.IO.Directory.Delete(directory); }
+        finally { System.IO.Directory.Delete(directory, true); }
         Console.WriteLine($"PASS: {count} preload checks (800-app cache, pending icons, prepared snapshots, background publication)");
     }
 }

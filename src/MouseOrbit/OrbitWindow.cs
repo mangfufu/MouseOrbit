@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Windows.Controls;
 using System.Windows.Media;
 
 namespace MouseOrbit;
@@ -35,9 +36,11 @@ internal sealed class OrbitWindow : Window
         Native.Position(this, x, y);
         CenterPixels = new(x + half, y + half);
         Show();
+        Visual.SetPresented(true);
         Ui.Enter(Visual, 4);
         Visual.InvalidateVisual();
     }
+    public new void Hide() { Visual.SetPresented(false); Ui.StopEntrance(Visual); base.Hide(); }
     public void Update(Native.Point point, string? pattern = null)
     {
         var dx = (point.X - CenterPixels.X) / Scale;
@@ -55,8 +58,14 @@ internal sealed class OrbitWindow : Window
     }
 }
 
-public sealed class OrbitVisual : FrameworkElement
+public sealed class OrbitVisual : Grid
 {
+    private readonly Canvas _particleOptions = new() { Width = 420, Height = 420, IsHitTestVisible = false };
+    private readonly List<ParticleField> _particles = new();
+    private readonly List<ParticleLabel> _labels = new();
+    private Preferences _settings = new();
+    private int _selected = -1;
+    private bool _pinned, _gesture, _presented;
     internal const double DeadZone = 96;
     private static readonly Geometry[] Sectors = Enumerable.Range(0, 8).Select(Sector).ToArray();
     private static Point Polar(double radius, double degrees)
@@ -76,14 +85,42 @@ public sealed class OrbitVisual : FrameworkElement
     }
     public OrbitVisual()
     {
-        Loaded += (_, _) => Palette.Changed += InvalidateVisual;
-        Unloaded += (_, _) => Palette.Changed -= InvalidateVisual;
+        Children.Add(new Viewbox { Child = _particleOptions, Stretch = Stretch.Uniform });
+        BuildParticles();
+        Loaded += (_, _) => { Palette.Changed += AppearanceChanged; if (_presented) SetPresented(true); };
+        Unloaded += (_, _) => { Palette.Changed -= AppearanceChanged; SetPresented(false); };
     }
-    public Preferences Settings { get; set; } = new();
-    public int Selected { get; set; } = -1;
+    private void AppearanceChanged() { BuildParticles(); InvalidateVisual(); }
+    private void BuildParticles()
+    {
+        foreach (var particle in _particles) particle.Stop();
+        _particleOptions.Children.Clear(); _particles.Clear(); _labels.Clear();
+        _particleOptions.Visibility = Palette.Spatial && !_gesture ? Visibility.Visible : Visibility.Collapsed;
+        for (int i = 0; i < 8; i++)
+        {
+            var point = SpatialWheel.LabelPosition(i); var option = new Grid { Width = 88, Height = 68 };
+            var field = new ParticleField(31 + i * 19, 88, 68); _particles.Add(field); option.Children.Add(field);
+            string id = _settings.Wheel[i];
+            option.Children.Add(new ParticleIcon(id) { Width = 20, Height = 20, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 10, 0, 0) });
+            var label = new ParticleLabel { Text = id == "topmost" && _pinned ? "取消置顶" : Commands.Find(id).Name,
+                FontSize = Commands.Find(id).Name.Length > 6 ? 10 : 11, TextAlignment = TextAlignment.Center,
+                Height = 22, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 35, 0, 0) };
+            _labels.Add(label); option.Children.Add(label);
+            Canvas.SetLeft(option, point.X - 44); Canvas.SetTop(option, point.Y - 30); _particleOptions.Children.Add(option);
+            field.SetActive(i == _selected, false); if (_presented && !_gesture) field.SetPresented(true);
+        }
+    }
+    internal void SetPresented(bool presented)
+    { _presented = presented; foreach (var particle in _particles) particle.SetPresented(presented && !_gesture && Palette.Spatial); }
+    public Preferences Settings { get => _settings; set { _settings = value; BuildParticles(); } }
+    public int Selected
+    {
+        get => _selected;
+        set { if (_selected == value) return; _selected = value; for (int i = 0; i < _particles.Count; i++) _particles[i].SetActive(i == value); }
+    }
     public int Page { get; set; }
-    public bool TargetPinned { get; set; }
-    public bool GestureMode { get; set; }
+    public bool TargetPinned { get => _pinned; set { if (_pinned == value) return; _pinned = value; BuildParticles(); } }
+    public bool GestureMode { get => _gesture; set { if (_gesture == value) return; _gesture = value; BuildParticles(); } }
     public string Pattern { get; set; } = "";
     public List<System.Windows.Point> Trail { get; } = new();
     private static SolidColorBrush Brush(string color) => (SolidColorBrush)new BrushConverter().ConvertFromString(color)!;
@@ -115,7 +152,7 @@ public sealed class OrbitVisual : FrameworkElement
             Text(dc, label, 12, Palette.Muted, 210, 225);
             dc.Pop(); dc.Pop(); return;
         }
-        if (Palette.Spatial) { SpatialWheel.Draw(dc, this, Text); dc.Pop(); return; }
+        if (Palette.Spatial) { dc.Pop(); return; }
         // Eight generous sectors share one open ring. Selection preserves alpha and hit targets.
         var idle = TileBrush(false); var hover = TileBrush(true);
         for (int i = 0; i < 8; i++)

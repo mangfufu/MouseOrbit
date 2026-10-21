@@ -13,10 +13,14 @@ internal sealed class SpatialSwitcherView : Grid
     private readonly StackPanel _lines = new();
     private readonly Canvas _actions = new();
     private readonly List<ParticleField> _fields = new();
+    private readonly LiquidFlow _spine = new(97, vertical: true) { Width = 58, HorizontalAlignment = HorizontalAlignment.Left };
+    private readonly Dictionary<ParticleField, Point> _fieldOrigins = new();
     private Button? _menuRow;
     private double _menuContentY;
     private bool _menuHeld;
     private bool _presented;
+    private int _layoutTransition;
+    private string? _closingGroup;
     private readonly Button _more;
     private readonly Dictionary<string, FrameworkElement> _cache = new();
     private IReadOnlyList<SwitchGroup> _groups = [];
@@ -28,6 +32,8 @@ internal sealed class SpatialSwitcherView : Grid
     internal event Action<string>? CategoryChanged;
     internal event Action? MenuRequested, DismissRequested;
     internal event Action<string>? MessageRequested;
+    internal event Action<SwitchWindow, FrameworkElement>? PreviewRequested;
+    internal event Action? PreviewDismissed;
     internal Func<string, DesktopEntry, bool>? RemoveRequested;
     internal const double RowHeight = 60;
     internal RailScrollViewer Flow => _flow;
@@ -46,7 +52,9 @@ internal sealed class SpatialSwitcherView : Grid
             e.Handled = true;
         };
         if (state != null) { Category = state.Category; _expanded = state.Expanded; }
+        Children.Add(_spine);
         _flow.Content = _lines; _flow.Margin = new Thickness(8, 8, 8, 8); Children.Add(_flow);
+        MouseMove += (_, args) => FeedPointer(args.GetPosition(this));
         _more = Ui.Icon("chevronRight", () => MenuRequested?.Invoke(), "更多", 12); _more.Width = 28; _more.Height = 36;
         var menuTarget = new Grid { Width = 28, Height = 36, Background = Brushes.Transparent };
         menuTarget.Children.Add(new UiIcon { Kind = "chevronRight", Width = 12, Height = 12 });
@@ -54,10 +62,10 @@ internal sealed class SpatialSwitcherView : Grid
         Canvas.SetLeft(_more, 216); Canvas.SetTop(_more, 12); _actions.Children.Add(_more); Children.Add(_actions);
         _more.MouseEnter += (_, _) => { Ui.Fade(_more, 1); if (_menuRow != null) FocusRow(_menuRow); };
         _more.MouseLeave += (_, _) => Ui.Fade(_more, .6);
-        _flow.ScrollChanged += (_, _) => { PositionMenu(); RefreshMotion(); };
+        _flow.ScrollChanged += (_, args) => { PositionMenu(); RefreshMotion(); if (Math.Abs(args.VerticalChange) > .01) PreviewDismissed?.Invoke(); };
         Loaded += (_, _) => RefreshMotion();
         Unloaded += (_, _) => StopMotion();
-        MouseLeave += (_, _) => { if (!_menuHeld && _menuRow?.Content is Grid grid) grid.Children.OfType<ParticleField>().FirstOrDefault()?.SetActive(false); };
+        MouseLeave += (_, _) => { FeedPointer(null); PreviewDismissed?.Invoke(); if (!_menuHeld && _menuRow?.Content is Grid grid) grid.Children.OfType<ParticleField>().FirstOrDefault()?.SetActive(false); };
         Typography.SetNumeralAlignment(this, FontNumeralAlignment.Tabular);
     }
     internal void SetData(IReadOnlyList<SwitchGroup> groups, Dictionary<string, IReadOnlyList<DesktopEntry>> entries)
@@ -69,6 +77,7 @@ internal sealed class SpatialSwitcherView : Grid
     internal void SelectCategory(string category)
     {
         if (category is not ("windows" or "frequent" or "recent")) return;
+        if (category == Category && _expanded == null) return;
         Category = category; _expanded = null; _cache.Clear(); Rebuild(); CategoryChanged?.Invoke(category);
     }
     private int Count => Category == "windows" ? _groups.Count : _entries.GetValueOrDefault(Category)?.Count ?? 0;
@@ -85,7 +94,7 @@ internal sealed class SpatialSwitcherView : Grid
     {
         double offset = _flow.VerticalOffset; object? anchor = _menuRow?.Tag;
         bool presented = _presented; var previous = _fields.ToHashSet();
-        StopMotion(); _presented = presented; foreach (var field in _fields) field.SetActive(false, false);
+        StopMotion(); _closingGroup = null; _presented = presented; foreach (var field in _fields) field.SetActive(false, false);
         _fields.Clear(); _menuRow = null; _lines.Children.Clear();
         for (int i = 0; i < Count; i++)
         {
@@ -102,7 +111,18 @@ internal sealed class SpatialSwitcherView : Grid
                 Track(row);
                 if (_expanded == group.Key)
                 {
-                    foreach (var window in group.Windows) { var child = WindowButton(window); _lines.Children.Add(child); Track(child); }
+                    int childIndex = 0;
+                    foreach (var window in group.Windows)
+                    {
+                        var child = WindowButton(window); _lines.Children.Add(child); Track(child);
+                        if (presented && SystemParameters.ClientAreaAnimation)
+                        {
+                            int ordinal = childIndex++;
+                            child.ClipToBounds = true; child.Height = 0;
+                            Ui.HeightTo(child, 40, true, Math.Min(ordinal, 5) * 12, completed: ordinal == group.Windows.Count - 1
+                                ? () => { if (_presented && _expanded == group.Key) RevealChildren(group.Key); } : null);
+                        }
+                    }
                 }
             }
             else { var entry = _entries[Category][i]; row = Cached(Category + ":" + entry.Id, () => EntryButton(entry)); _lines.Children.Add(row); Track(row); }
@@ -141,9 +161,16 @@ internal sealed class SpatialSwitcherView : Grid
         { field.SetJoined(_menuHeld); field.SetActive(active, animate); }
         _menuContentY = button.TransformToAncestor(_lines).Transform(new Point()).Y;
         PositionMenu();
+        if (active && !_menuHeld)
+        {
+            if (WindowForRow(button) is { } window) PreviewRequested?.Invoke(window, button);
+            else PreviewDismissed?.Invoke();
+        }
     }
+    internal SwitchWindow? WindowForRow(Button row) => row.Tag is SwitchWindow window ? window : Category == "windows" && row.Tag is string key ? _groups.FirstOrDefault(g => g.Key == key)?.Recent : null;
     private void PositionMenu()
     {
+        if (_menuRow != null && _menuRow.IsDescendantOf(_lines)) _menuContentY = _menuRow.TransformToAncestor(_lines).Transform(new Point()).Y;
         double top = 8 + _menuContentY - _flow.VerticalOffset;
         Canvas.SetTop(_more, top + (RowHeight - 36) / 2);
         _more.Visibility = top >= 7 && top + 80 <= (Height > 0 ? Height : 376) - 7 ? Visibility.Visible : Visibility.Hidden;
@@ -151,6 +178,7 @@ internal sealed class SpatialSwitcherView : Grid
     internal void HoldMenu(bool held)
     {
         _menuHeld = held;
+        if (held) PreviewDismissed?.Invoke();
         if (_menuRow?.Content is Grid grid && grid.Children.OfType<ParticleField>().FirstOrDefault() is { } field)
         { field.SetJoined(held); field.SetActive(held || IsMouseOver); }
     }
@@ -169,7 +197,20 @@ internal sealed class SpatialSwitcherView : Grid
     {
         if (!_presented) return;
         var visible = VisibleFields().ToHashSet();
+        _fieldOrigins.Clear();
+        foreach (var field in visible) _fieldOrigins[field] = field.TransformToAncestor(this).Transform(new Point());
         foreach (var field in _fields) field.SetPresented(visible.Contains(field));
+        _spine.SetPresented(true);
+    }
+    internal void FeedPointer(Point? pointer)
+    {
+        _spine.SetPointer(pointer);
+        foreach (var (field, origin) in _fieldOrigins)
+        {
+            Point? local = pointer == null ? null : new Point(pointer.Value.X - origin.X, pointer.Value.Y - origin.Y);
+            if (local is { } p && (p.X < -60 || p.X > field.Width + 60 || p.Y < -60 || p.Y > field.Height + 60)) local = null;
+            field.SetPointer(local);
+        }
     }
     private static void Reveal(ParticleField field, int delay)
     { field.Pulse(delay: delay); if (field.Parent is UIElement content) Ui.Reveal(content, delay); }
@@ -178,14 +219,22 @@ internal sealed class SpatialSwitcherView : Grid
         var button = Choice(group.Recent.Icon, group.Name, () =>
         {
             if (group.Windows.Count == 1) { Pick(group.Recent); return; }
-            bool collapse = _expanded == group.Key; _expanded = collapse ? null : group.Key;
+            if (_closingGroup == group.Key && _presented)
+            {
+                ++_layoutTransition; _closingGroup = null; _expanded = group.Key;
+                foreach (var child in _lines.Children.OfType<FrameworkElement>().Where(c => c.Tag is SwitchWindow)) Ui.HeightTo(child, 40, true);
+                return;
+            }
+            bool collapse = _expanded == group.Key;
+            if (collapse && TryCloseRows()) return;
+            _expanded = collapse ? null : group.Key;
             RebuildFlow();
             if (!collapse)
             {
                 Dispatcher.BeginInvoke(new Action(() => RevealChildren(group.Key)), System.Windows.Threading.DispatcherPriority.Loaded);
             }
         }, 236, RowHeight, group.Windows.Count);
-        button.Tag = group.Key; return button;
+        button.Tag = group.Key; button.ToolTip = null; return button;
     }
     private void RevealChildren(string key)
     {
@@ -194,7 +243,8 @@ internal sealed class SpatialSwitcherView : Grid
         if (children.Length == 0) return;
         var first = children[0].TransformToAncestor(_lines).Transform(new Point());
         double bottom = first.Y + Math.Min(children.Sum(c => c.ActualHeight), _flow.ViewportHeight - RowHeight);
-        if (bottom > _flow.VerticalOffset + _flow.ViewportHeight) _flow.Jump(bottom - _flow.ViewportHeight);
+        if (bottom > _flow.VerticalOffset + _flow.ViewportHeight)
+        { if (_presented) _flow.MoveTo(bottom - _flow.ViewportHeight); else _flow.Jump(bottom - _flow.ViewportHeight); }
     }
     private Button WindowButton(SwitchWindow window)
     {
@@ -204,7 +254,7 @@ internal sealed class SpatialSwitcherView : Grid
             var icon = content.Children.OfType<EntryIcon>().Single(); icon.Width = icon.Height = 18; icon.Margin = new Thickness(11, 0, 0, 0);
         }
         button.Margin = new Thickness(16, 0, 0, 0);
-        button.Tag = window; return button;
+        button.Tag = window; button.ToolTip = null; return button;
     }
     private void Pick(SwitchWindow window)
     {
@@ -235,8 +285,9 @@ internal sealed class SpatialSwitcherView : Grid
         if (entry.Kind == "command") content.Children.Add(new Border { Width = 32, Height = 32,
             Background = Palette.Surface, CornerRadius = new CornerRadius(6), IsHitTestVisible = false,
             HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(4, 0, 0, 0) });
-        content.Children.Add(new EntryIcon { Entry = entry, Width = 32, Height = 32,
-            HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(7, 0, 0, 0) });
+        var artwork = new EntryIcon { Entry = entry, Width = 32, Height = 32,
+            HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(7, 0, 0, 0) };
+        content.Children.Add(artwork); surface.BindIcon(artwork);
         content.Children.Add(new ParticleLabel { Text = name, Foreground = Palette.Ink, FontSize = 14, VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(60, 0, count > 1 || Category != "windows" ? 68 : 32, 0) });
         if (count > 1)
@@ -250,18 +301,35 @@ internal sealed class SpatialSwitcherView : Grid
         var button = Palette.Button(content, action, name); button.Template = BareButton; button.Width = width; button.Height = height; button.Padding = new Thickness(0); button.HorizontalAlignment = HorizontalAlignment.Left;
         ToolTipService.SetInitialShowDelay(button, 500);
         button.MouseEnter += (_, _) => FocusRow(button);
-        button.PreviewMouseLeftButtonDown += (_, _) => surface.SetActive(true);
+        button.MouseLeave += (_, _) => PreviewDismissed?.Invoke();
+        button.PreviewMouseLeftButtonDown += (_, _) => { surface.SetActive(true); surface.Press(true); };
+        button.PreviewMouseLeftButtonUp += (_, _) => surface.Press(false);
         return button;
     }
-    internal void Collapse() { if (_expanded == null) return; _expanded = null; Rebuild(); }
+    private bool TryCloseRows()
+    {
+        if (!_presented || !SystemParameters.ClientAreaAnimation) return false;
+        var children = _lines.Children.OfType<FrameworkElement>().Where(c => c.Tag is SwitchWindow).ToArray();
+        if (children.Length == 0) return false;
+        _closingGroup = _expanded; _expanded = null; int version = ++_layoutTransition;
+        int remaining = children.Length;
+        for (int i = 0; i < children.Length; i++)
+            Ui.HeightTo(children[i], 0, false, completed: () => { if (--remaining == 0 && version == _layoutTransition) RebuildFlow(); });
+        return true;
+    }
+    internal void Collapse() { if (_expanded == null) return; if (TryCloseRows()) return; _expanded = null; Rebuild(); }
     internal void StopMotion()
     {
+        PreviewDismissed?.Invoke();
+        ++_layoutTransition;
         _presented = false; _flow.StopMotion();
+        _spine.SetPresented(false); _fieldOrigins.Clear();
         _more.BeginAnimation(OpacityProperty, null);
         foreach (var field in _fields)
         {
             field.Stop();
             if (field.Parent is UIElement content) { content.BeginAnimation(OpacityProperty, null); content.Opacity = 1; }
         }
+        foreach (var row in _lines.Children.OfType<FrameworkElement>()) FluidHeight.Stop(row);
     }
 }

@@ -20,6 +20,8 @@ internal sealed class OrbitController : IDisposable
     private readonly TriggerPress _press = new();
     private readonly WindowCatalog _catalog = new();
     private readonly WindowSnapshotCache _windowCache;
+    internal LauncherSession LauncherSession { get; } = new(new Launcher());
+    private MainWindow? _manager;
     private TaskCompletionSource? _startupReady;
     private long _nextWindowRefresh;
     private readonly CaptureTools _capture = new();
@@ -65,6 +67,13 @@ internal sealed class OrbitController : IDisposable
         _quick.ToolRequested += id => _ = Tool(id);
         _quick.RemoveRecentRequested = entry => RemoveRecentEntry?.Invoke(entry) == true;
         _quick.RemoveFrequentRequested = entry => RemoveFrequentEntry?.Invoke(entry) == true;
+        QuickEntries = LauncherSession.BuildQuickEntries;
+        RemoveRecentEntry = entry => LauncherSession.Remove(entry, false);
+        RemoveFrequentEntry = entry => LauncherSession.Remove(entry, true);
+        EntryOpened += LauncherSession.Record;
+        LauncherSession.Changed += () => { if (!_disposed && !Interacting) PrepareAssistant(); };
+        LauncherSession.Status += Report;
+        LauncherSession.Start(Settings, () => _disposed || Paused || Interacting || _manager?.IsVisible == true);
         _trayIcon = Ui.TrayIcon(); _tray = new System.Windows.Forms.NotifyIcon { Icon = _trayIcon, Text = "MouseOrbit", Visible = true };
         var menu = Ui.Menu(_quick); _trayMenu = menu;
         void Add(string title, string icon, Action action)
@@ -415,7 +424,7 @@ internal sealed class OrbitController : IDisposable
         _quick.Hide(); await Execute(id, _target);
     }
     public async Task<bool> ExecuteFromAssistant(Command command)
-    { Application.Current.MainWindow.Hide(); return await Execute(command.Id, _target); }
+    { Application.Current.MainWindow?.Hide(); return await Execute(command.Id, _target); }
     public void Cancel()
     {
         _wheel = false; _wheelFromHold = false; _gestureCanceled = true; _press.Cancel(); _gestureVersion++;
@@ -438,8 +447,17 @@ internal sealed class OrbitController : IDisposable
     public void TogglePause() { Settings.ManualFocus = !Settings.ManualFocus; _focusItem.IsChecked = Settings.ManualFocus; if (Paused) Cancel(); Save(); Report(Settings.ManualFocus ? "专注模式" : ""); }
     public void Save()
     { PublishInputContext(); try { Settings.Save(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Report("设置保存失败：" + ex.Message); } }
-    public void OpenSettings() { CancelQuickOpen(); _quick.Hide(); Application.Current.MainWindow.Show(); Application.Current.MainWindow.WindowState = WindowState.Normal; Application.Current.MainWindow.Activate(); PublishInputContext(); }
+    public void OpenSettings()
+    {
+        CancelQuickOpen(); _quick.Hide();
+        if (_manager == null)
+        {
+            _manager = new MainWindow(this); Application.Current.MainWindow = _manager;
+            _manager.Closed += (_, _) => { Application.Current.MainWindow = _quick; _manager = null; };
+        }
+        _manager.Show(); _manager.WindowState = WindowState.Normal; _manager.Activate(); PublishInputContext();
+    }
     private void Report(string text) { LastStatus = text; Status?.Invoke(text); }
     public void Dispose()
-    { _disposed = true; _timer.Stop(); _input.Dispose(); _capture.Dispose(); _graphics.Dispose(); _feedback.Dispose(); _trayMenu.IsOpen = false; _tray.Visible = false; _tray.Dispose(); _trayIcon.Dispose(); _orbit.Close(); _quick.Close(); }
+    { _disposed = true; LauncherSession.Dispose(); _timer.Stop(); _input.Dispose(); _capture.Dispose(); _graphics.Dispose(); _feedback.Dispose(); _trayMenu.IsOpen = false; _tray.Visible = false; _tray.Dispose(); _trayIcon.Dispose(); _orbit.Close(); _quick.Close(); }
 }

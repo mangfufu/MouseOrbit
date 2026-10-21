@@ -82,7 +82,6 @@ internal static class UiResponsivenessChecks
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
             var launcher = (Launcher)typeof(MainWindow).GetField("_launcher", flags)!.GetValue(manager)!;
             ((List<DesktopEntry>)launcher.Entries).AddRange(Enumerable.Range(0, 800).Select(i => new DesktopEntry("cached:" + i, "应用 " + i, "", "app", "unused", "")));
-            typeof(MainWindow).GetField("_lastIndexRefresh", flags)!.SetValue(manager, Environment.TickCount64);
             manager.PrepareView();
             void Category(string key)
             {

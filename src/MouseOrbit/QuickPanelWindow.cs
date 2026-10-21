@@ -23,6 +23,10 @@ internal sealed class QuickPanelWindow : Window
     private Rect _bounds;
     private Native.Point _anchor;
     private bool _shown, _leftSide;
+    private readonly System.Windows.Threading.DispatcherTimer _previewDelay = new() { Interval = TimeSpan.FromMilliseconds(180) };
+    private WindowPreviewWindow? _windowPreview;
+    private SwitchWindow? _previewSource;
+    private FrameworkElement? _previewRow;
     private sealed record WindowTileData(SwitchWindow Window, SwitchGroup? App);
     private string PageKey => _expanded == null ? _group : "app:" + _expanded.Key;
     public new bool IsVisible => _shown;
@@ -42,9 +46,15 @@ internal sealed class QuickPanelWindow : Window
         Background = Brushes.Transparent; ShowInTaskbar = false; ShowActivated = false; Topmost = true;
         UseLayoutRounding = true; SnapsToDevicePixels = true; FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI");
         Ui.Install(this); BuildLayout();
+        _previewDelay.Tick += (_, _) =>
+        {
+            _previewDelay.Stop();
+            if (!_shown || _menu?.IsOpen == true || _previewSource == null || _previewRow is not { IsMouseOver: true, IsVisible: true }) return;
+            (_windowPreview ??= new WindowPreviewWindow()).Open(_previewSource, _previewRow);
+        };
         SourceInitialized += (_, _) => { Native.OverlayStyle(this, false); Native.DisableTransitions(this); };
         Palette.Changed += ThemeChanged;
-        Closed += (_, _) => { SpatialView?.StopMotion(); Ui.StopEntrance(_shell); _shown = false; OpenStateChanged?.Invoke(); Palette.Changed -= ThemeChanged; if (_menu != null) _menu.IsOpen = false; };
+        Closed += (_, _) => { CancelPreview(); _windowPreview?.Close(); SpatialView?.StopMotion(); Ui.StopEntrance(_shell); _shown = false; OpenStateChanged?.Invoke(); Palette.Changed -= ThemeChanged; if (_menu != null) _menu.IsOpen = false; };
         PreviewMouseWheel += (_, e) => { ScrollWheel(e.Delta); e.Handled = true; };
     }
     private void ThemeChanged()
@@ -77,6 +87,12 @@ internal sealed class QuickPanelWindow : Window
             SpatialView.DismissRequested += () => { Hide(); Dismissed?.Invoke(); };
             SpatialView.RemoveRequested = (group, entry) => (group == "recent" ? RemoveRecentRequested : RemoveFrequentRequested)?.Invoke(entry) == true;
             SpatialView.MessageRequested += Message;
+            SpatialView.PreviewRequested += (source, row) =>
+            {
+                if (!_shown) return;
+                CancelPreview(); _previewSource = source; _previewRow = row; _previewDelay.Start();
+            };
+            SpatialView.PreviewDismissed += CancelPreview;
             SpatialView.SetData(_windows, _snapshot); return;
         }
         if (state != null) { _group = state.Category; _expanded = _windows.FirstOrDefault(g => g.Key == state.Expanded); }
@@ -108,6 +124,7 @@ internal sealed class QuickPanelWindow : Window
     }
     private void OpenMenu()
     {
+        CancelPreview();
         if (_menu != null) _menu.IsOpen = false;
         _menu = CreateMenu(); SpatialView?.HoldMenu(true);
         _menu.Closed += (_, _) => SpatialView?.HoldMenu(false);
@@ -172,13 +189,14 @@ internal sealed class QuickPanelWindow : Window
             settings = Add("设置", () => { }, "settings");
         }
         else menu.Items.Add(new Separator());
-        Add("轮盘", () => { Hide(); ToolRequested?.Invoke("wheel"); }, "wheel", settings);
         Add("专注模式", () => { Hide(); ToolRequested?.Invoke("focus"); }, parent: settings);
         Add("管理", () => { Hide(); Manage?.Invoke(); }, "settings", settings);
         Add("关闭", () => { Hide(); Dismissed?.Invoke(); }, "close", settings);
         return menu;
     }
     public void Message(string text) { _shell.ToolTip = text; }
+    private void CancelPreview()
+    { _previewDelay.Stop(); _previewSource = null; _previewRow = null; _windowPreview?.Dismiss(); }
     private void SelectGroup(string group, bool animate = true)
     {
         if (SpatialView != null) { SpatialView.SelectCategory(group); return; }
@@ -259,13 +277,15 @@ internal sealed class QuickPanelWindow : Window
         (tile, entry) => tile.Tag is DesktopEntry old && SameEntry(old, entry), entry => EntryTile(entry, group), "暂无项目");
     private void SetSnapshot(Dictionary<string, IReadOnlyList<DesktopEntry>> snapshot)
     {
+        bool changed = _snapshot.Count != snapshot.Count || snapshot.Any(pair =>
+            !_snapshot.TryGetValue(pair.Key, out var old) || !old.SequenceEqual(pair.Value));
         foreach (string group in new[] { "frequent", "recent" })
         {
             var next = snapshot.GetValueOrDefault(group) ?? []; var old = _snapshot.GetValueOrDefault(group) ?? [];
             if (_pages.TryGetValue(group, out var page) && (old.Count != next.Count || !old.Zip(next).All(p => SameEntry(p.First, p.Second)))) PatchEntries(page, next, group);
         }
         _snapshot = snapshot.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<DesktopEntry>)pair.Value.ToArray());
-        SpatialView?.SetData(_windows, _snapshot);
+        if (changed) SpatialView?.SetData(_windows, _snapshot);
     }
     private Button IconButton(DesktopEntry entry, string label, string tooltip, Action action, int count = 0, bool caption = false)
     {
@@ -364,7 +384,7 @@ internal sealed class QuickPanelWindow : Window
         Place(point, screen);
         if (!base.IsVisible) { Native.ClipPopup(this, true); base.Show(); }
         _shell.BeginAnimation(OpacityProperty, null); _shell.Opacity = 1;
-        Ui.Enter(_shell, 3);
+        Ui.Enter(_shell, 7, new Point(.06, .1));
         Native.ClipPopup(this, false); _shown = true;
         SpatialView?.RevealParticles();
         Native.SetWindowPos(new System.Windows.Interop.WindowInteropHelper(this).Handle, new nint(-1), 0, 0, 0, 0, 0x0213); OpenStateChanged?.Invoke();
@@ -373,6 +393,7 @@ internal sealed class QuickPanelWindow : Window
     }
     public new void Hide()
     {
+        CancelPreview();
         if (_menu != null) _menu.IsOpen = false;
         if (!_shown) return;
         _currentPage?.StopMotion(); SpatialView?.StopMotion(); Ui.StopEntrance(_shell); _shown = false; OpenStateChanged?.Invoke(); Native.ClipPopup(this, true);
@@ -403,18 +424,27 @@ internal static class RailPlacement
     }
 }
 
-internal sealed class RailScrollViewer : ScrollViewer
+internal sealed class RailScrollViewer : ScrollViewer, IFlowFrame
 {
-    private static readonly DependencyProperty OffsetProperty = DependencyProperty.Register("Offset", typeof(double), typeof(RailScrollViewer),
-        new PropertyMetadata(0d, (sender, e) => ((RailScrollViewer)sender).ScrollToVerticalOffset((double)e.NewValue)));
     private double _target;
+    private FluidSpring _offset = new(0);
+    private bool _running;
+    internal RailScrollViewer() { Unloaded += (_, _) => StopMotion(); }
     internal void MoveBy(double amount)
     {
-        _target = Math.Clamp(_target + amount, 0, ScrollableHeight); double from = VerticalOffset;
-        if (!SystemParameters.ClientAreaAnimation) { Jump(_target); return; }
-        SetCurrentValue(OffsetProperty, _target);
-        BeginAnimation(OffsetProperty, new DoubleAnimation(from, _target, TimeSpan.FromMilliseconds(145)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } }, HandoffBehavior.SnapshotAndReplace);
+        MoveTo(_target + amount);
     }
-    internal void Jump(double offset) { BeginAnimation(OffsetProperty, null); _target = Math.Clamp(offset, 0, ScrollableHeight); SetCurrentValue(OffsetProperty, _target); ScrollToVerticalOffset(_target); }
+    internal void MoveTo(double offset)
+    {
+        _target = Math.Clamp(offset, 0, ScrollableHeight);
+        if (!SystemParameters.ClientAreaAnimation) { Jump(_target); return; }
+        if (!_running) { _offset.Set(VerticalOffset); _running = true; FlowClock.Add(this); }
+    }
+    public void AdvanceFlow(double seconds)
+    {
+        _offset.Step(_target, seconds, 19, .87); ScrollToVerticalOffset(Math.Clamp(_offset.Value, 0, ScrollableHeight));
+        if (Math.Abs(_offset.Value - _target) < .04 && Math.Abs(_offset.Velocity) < .2) Jump(_target);
+    }
+    internal void Jump(double offset) { _running = false; FlowClock.Remove(this); _target = Math.Clamp(offset, 0, ScrollableHeight); _offset.Set(_target); ScrollToVerticalOffset(_target); }
     internal void StopMotion() => Jump(VerticalOffset);
 }

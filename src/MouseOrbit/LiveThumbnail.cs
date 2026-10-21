@@ -24,14 +24,15 @@ internal sealed class LiveThumbnail : IDisposable
     private readonly FrameworkElement _host;
     private readonly ScrollViewer _viewport;
     private readonly SwitchWindow _source;
+    private readonly bool _contain;
     private nint _thumbnail;
     private bool _visible, _disposed;
     private WindowNative.Box _destination, _crop;
     private WindowNative.Box _sourceBounds;
     private PixelSize _sourceSize;
-    internal LiveThumbnail(Window owner, FrameworkElement host, ScrollViewer viewport, SwitchWindow source)
+    internal LiveThumbnail(Window owner, FrameworkElement host, ScrollViewer viewport, SwitchWindow source, bool contain = false)
     {
-        _owner = owner; _host = host; _viewport = viewport; _source = source;
+        _owner = owner; _host = host; _viewport = viewport; _source = source; _contain = contain;
         _host.LayoutUpdated += Updated; _host.IsVisibleChanged += VisibilityChanged; _owner.IsVisibleChanged += VisibilityChanged;
         if (owner is QuickPanelWindow quick) quick.OpenStateChanged += OpenStateChanged;
     }
@@ -69,6 +70,12 @@ internal sealed class LiveThumbnail : IDisposable
         }
         var sourceSize = _sourceSize;
         if (sourceSize.Width < 1 || sourceSize.Height < 1) { Hide(); return; }
+        if (_contain)
+        {
+            full = FitBounds(full, new Size(sourceSize.Width, sourceSize.Height));
+            clipped.Intersect(full);
+            if (clipped.IsEmpty) { Hide(); return; }
+        }
         double scale = Math.Max(full.Width / sourceSize.Width, full.Height / sourceSize.Height);
         double sx = (sourceSize.Width - full.Width / scale) / 2, sy = (sourceSize.Height - full.Height / scale) / 2;
         var crop = Box(new Rect(sx + (clipped.Left - full.Left) / scale, sy + (clipped.Top - full.Top) / scale, clipped.Width / scale, clipped.Height / scale));
@@ -76,6 +83,11 @@ internal sealed class LiveThumbnail : IDisposable
         if (_visible && _destination.Equals(destination) && _crop.Equals(crop)) return;
         var properties = new Properties { Flags = 0x1F, Destination = destination, Source = crop, Opacity = 255, Visible = true };
         if (DwmUpdateThumbnailProperties(_thumbnail, ref properties) == 0) { _destination = destination; _crop = crop; _visible = true; }
+    }
+    internal static Rect FitBounds(Rect area, Size source)
+    {
+        double fit = Math.Min(area.Width / source.Width, area.Height / source.Height);
+        return new Rect(area.X + (area.Width - source.Width * fit) / 2, area.Y + (area.Height - source.Height * fit) / 2, source.Width * fit, source.Height * fit);
     }
     public void Dispose()
     {

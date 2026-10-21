@@ -29,9 +29,10 @@ internal static class CaptureFeatureChecks
             var plain = OffscreenPreview.Render(visual, 420, 420); var before = Pixels(plain);
             visual.Selected = 1; visual.InvalidateVisual(); var selected = OffscreenPreview.Render(visual, 420, 420); var after = Pixels(selected);
             Check(Pixel(selected, 210, 210).A == 0 && Pixel(selected, 210, 150).A == 0, "wheel center and gaps remain fully transparent: " + theme.Id);
-            Check(Pixel(selected, 230, 80).A is > 200 and < 255 && Pixel(selected, 285, 90).A == Pixel(plain, 285, 90).A, "tiles stay translucent at the same alpha on hover: " + theme.Id);
-            Check(Enumerable.Range(0, before.Length / 4).All(i => before[i * 4 + 3] == after[i * 4 + 3]), "hover never changes wheel transparency or geometry: " + theme.Id);
-            Check(!before.SequenceEqual(after), "hover changes wheel color: " + theme.Id);
+            Check(Pixel(selected, 230, 80).A < 100 && Pixel(selected, 285, 90).A < 100, "wheel has dispersed grain instead of a solid ring behind the options: " + theme.Id);
+            Check(Enumerable.Range(50, 68).All(y => Enumerable.Range(166, 88).All(x => before[(y * 420 + x) * 4 + 3] == after[(y * 420 + x) * 4 + 3])),
+                "focusing one wheel command leaves the other command surfaces unchanged: " + theme.Id);
+            Check(!before.SequenceEqual(after), "hover gathers local wheel particles: " + theme.Id);
             if (theme.Id == "typefield") ScreenPixels.SavePng(selected, "output/qa/wheel-translucent.png");
             visual.TargetPinned = true; visual.InvalidateVisual(); var pinned = OffscreenPreview.Render(visual, 420, 420);
             Check(!Pixels(pinned).SequenceEqual(after), "pinned target has a visible wheel state: " + theme.Id);
