@@ -1,0 +1,97 @@
+using System.Windows.Media;
+
+namespace MouseOrbit;
+
+internal static class SpatialSurfaces
+{
+    internal static SolidColorBrush Selected
+    {
+        get
+        {
+            var surface = Palette.Surface.Color; var ink = Palette.Accent.Color;
+            byte Mix(byte a, byte b) => (byte)Math.Round(a * .82 + b * .18);
+            var brush = new SolidColorBrush(Color.FromArgb(surface.A, Mix(surface.R, ink.R), Mix(surface.G, ink.G), Mix(surface.B, ink.B)));
+            brush.Freeze(); return brush;
+        }
+    }
+}
+
+internal static class SpatialWheel
+{
+    internal static bool HoldMoved(double dx, double dy) => dx * dx + dy * dy >= PointerPress.TapDistance * PointerPress.TapDistance;
+    internal static int Hit(AppearanceLayout mode, double dx, double dy)
+    {
+        var point = new Point(210 + dx, 210 + dy);
+        for (int i = 0; i < 8; i++)
+        {
+            var p = LabelPosition(i);
+            if (mode == AppearanceLayout.Typefield && new Rect(p.X - 44, p.Y - 30, 88, 68).Contains(point)) return i;
+        }
+        return -1;
+    }
+    private static Point Polar(double radius, double degrees)
+    { double a = degrees * Math.PI / 180; return new(210 + radius * Math.Cos(a), 210 + radius * Math.Sin(a)); }
+    private static Geometry ReadingRing()
+    {
+        var geometry = new StreamGeometry { FillRule = FillRule.EvenOdd };
+        using (var path = geometry.Open())
+        {
+            foreach (double radius in new[] { 201d, 80d })
+            {
+                path.BeginFigure(Polar(radius, 22.5), true, true);
+                for (int i = 1; i < 8; i++) path.LineTo(Polar(radius, 22.5 + i * 45), true, false);
+            }
+        }
+        geometry.Freeze(); return geometry;
+    }
+    internal static Point LabelPosition(int index) => Polar(130, index * 45 - 90);
+    internal static readonly Geometry TypefieldPlane = ReadingRing();
+    internal static void Draw(DrawingContext dc, OrbitVisual view, Action<DrawingContext, string, double, Brush, double, double, bool> text)
+    {
+        bool type = Palette.Layout == AppearanceLayout.Typefield;
+        var idle = Palette.Surface;
+        if (type)
+        {
+            // Composite the field and its focus marks once. Hover must not thicken its transparency.
+            var opaque = idle.CloneCurrentValue(); var color = opaque.Color; color.A = 255; opaque.Color = color;
+            dc.PushOpacity(idle.Color.A / 255d);
+            dc.DrawGeometry(opaque, new Pen(Palette.Edge, .5), TypefieldPlane);
+            if (view.Selected is >= 0 and < 8)
+            {
+                var p = LabelPosition(view.Selected); var pen = new Pen(Palette.Ink, 1);
+                dc.DrawLine(pen, new(p.X - 32, p.Y - 28), new(p.X - 38, p.Y - 28));
+                dc.DrawLine(pen, new(p.X - 38, p.Y - 28), new(p.X - 38, p.Y - 22));
+                dc.DrawLine(pen, new(p.X + 32, p.Y + 36), new(p.X + 38, p.Y + 36));
+                dc.DrawLine(pen, new(p.X + 38, p.Y + 36), new(p.X + 38, p.Y + 30));
+            }
+            dc.Pop();
+        }
+        for (int i = 0; i < 8; i++)
+        {
+            bool active = i == view.Selected; var p = LabelPosition(i);
+            var command = Commands.Find(view.Settings.Wheel[i]);
+            dc.DrawImage(CommandIcons.Get(command.Id), new Rect(p.X - 10, p.Y - 20, 20, 20));
+            bool pinned = command.Id == "topmost" && view.TargetPinned;
+            string name = pinned ? "取消置顶" : command.Name;
+            text(dc, name, name.Length > 6 ? 10 : 11, Palette.Ink, p.X, p.Y + 15, false);
+            var ink = Palette.Ink.Color;
+            var mark = active ? new SolidColorBrush(Color.FromArgb(idle.Color.A, ink.R, ink.G, ink.B)) : idle;
+            dc.DrawRoundedRectangle(mark, null, new Rect(p.X - 7, p.Y + 27, 14, 1), .5, .5);
+            if (pinned) dc.DrawEllipse(Palette.Muted, null, new(p.X + 18, p.Y - 18), 2, 2);
+        }
+    }
+}
+
+internal static class SwitcherPlacement
+{
+    internal static Rect Place(AppearanceLayout mode, double x, double y, double width, double height, Rect area, double dpi = 1)
+    {
+        if (mode == AppearanceLayout.Classic) return RailPlacement.Place(x, y, width, height, area, 18 * dpi);
+        width = Math.Min(width, area.Width); height = Math.Min(height, area.Height);
+        double scale = Math.Min(width / 254, height / 376);
+        double left = x + 18 * dpi;
+        if (mode == AppearanceLayout.Typefield && left + width > area.Right) left = x - 18 * dpi - width;
+        double top = y - 38 * scale;
+        return new(Math.Clamp(left, area.Left, area.Right - width), Math.Clamp(top, area.Top, area.Bottom - height), width, height);
+    }
+}

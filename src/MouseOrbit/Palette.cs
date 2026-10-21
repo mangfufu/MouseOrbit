@@ -29,25 +29,44 @@ internal static class Palette
     public static readonly SolidColorBrush Selected = ThemeBrush(Color.FromArgb(66, 172, 86, 49));
     public static readonly SolidColorBrush Edge = ThemeBrush(Color.FromArgb(140, 146, 131, 107));
     public static readonly SolidColorBrush Accent = ThemeBrush(Color.FromRgb(170, 77, 42));
+    public static readonly SolidColorBrush Card = ThemeBrush(Color.FromArgb(80, 255, 255, 255));
+    public static readonly SolidColorBrush Chrome = ThemeBrush(Color.FromArgb(45, 255, 255, 255));
+    public static readonly SolidColorBrush Hairline = ThemeBrush(Color.FromArgb(70, 255, 255, 255));
     public static readonly FontFamily PixelFont = new(new Uri("pack://application:,,,/MouseOrbit;component/"), "./Assets/Fonts/#Tiny5");
     public static bool Dark { get; private set; }
-    public static ThemePreset Current { get; private set; } = ThemePresets.Find("pixel-light");
+    private static bool _backdropDark;
+    public static ThemePreset Current { get; private set; } = ThemePresets.Find("typefield");
     public static bool Pixel => Current.Pixel;
+    public static AppearanceLayout Layout => Current.Layout;
+    public static bool Spatial => Layout != AppearanceLayout.Classic;
     public static CornerRadius PanelCorner => new(Current.Radius);
-    public static CornerRadius ButtonCorner => new(Pixel ? 1 : 6);
-    public static FontFamily BrandFont => Pixel ? PixelFont : new FontFamily("Segoe UI, Microsoft YaHei UI");
+    public static CornerRadius ButtonCorner => new(6);
+    public static FontFamily BrandFont => new("Segoe UI, Microsoft YaHei UI");
     public static event Action? Changed;
     public static void SetTheme(bool dark)
-        => Apply(dark ? "pixel-dark" : "pixel-light");
+        { SetBackdropDark(dark); Apply("typefield"); }
+    internal static void SetBackdropDark(bool dark)
+    {
+        if (_backdropDark == dark) return;
+        _backdropDark = dark; Apply(Current.Id);
+    }
     public static void Apply(string id)
     {
-        Current = ThemePresets.Find(id); Dark = Current.Dark;
+        Current = ThemePresets.Find(id);
+        if (_backdropDark) Current = Current with { Dark = true,
+            Surface = "#DC282D30",
+            Paper = "#303638",
+            Ink = "#E8ECEF", Muted = "#CCD2D6", Accent = "#A5AFB5" };
+        Dark = Current.Dark;
         Color C(string hex) => (Color)ColorConverter.ConvertFromString(hex);
         Set(Ink, C(Current.Ink)); Set(Muted, C(Current.Muted)); Set(Paper, C(Current.Paper)); Set(Surface, C(Current.Surface)); Set(Accent, C(Current.Accent));
         var muted = C(Current.Muted); var accent = C(Current.Accent);
-        Set(Hover, Color.FromArgb(Dark ? (byte)32 : (byte)25, muted.R, muted.G, muted.B));
-        Set(Selected, Color.FromArgb(Dark ? (byte)65 : (byte)48, accent.R, accent.G, accent.B));
-        Set(Edge, Color.FromArgb(Dark ? (byte)125 : (byte)100, muted.R, muted.G, muted.B));
+        Set(Hover, Color.FromArgb(Dark ? (byte)25 : (byte)18, muted.R, muted.G, muted.B));
+        Set(Selected, Color.FromArgb(Dark ? (byte)46 : (byte)32, accent.R, accent.G, accent.B));
+        Set(Edge, Color.FromArgb(Dark ? (byte)63 : (byte)48, muted.R, muted.G, muted.B));
+        Set(Card, Dark ? Color.FromArgb(10, 255, 255, 255) : Color.FromArgb(60, 255, 255, 255));
+        Set(Chrome, Dark ? Color.FromArgb(15, 0, 0, 0) : Color.FromArgb(42, 255, 255, 255));
+        Set(Hairline, Spatial ? Colors.Transparent : Dark ? Color.FromArgb(45, 255, 255, 255) : Color.FromArgb(150, 255, 255, 255));
         CommandIcons.Clear(); Changed?.Invoke();
     }
     public static void Resources(ResourceDictionary resources)
@@ -55,6 +74,7 @@ internal static class Palette
         resources["Ink"] = Ink; resources["Muted"] = Muted; resources["Paper"] = Paper; resources["Surface"] = Surface;
         resources["Hover"] = Hover; resources["Selected"] = Selected; resources["Edge"] = Edge; resources["Accent"] = Accent; resources["PixelFont"] = PixelFont;
         resources["BrandFont"] = BrandFont; resources["PanelCorner"] = PanelCorner; resources["ButtonCorner"] = ButtonCorner;
+        resources["Card"] = Card; resources["Chrome"] = Chrome; resources["Hairline"] = Hairline;
     }
     public static Brush B(string value) { var brush = (Brush)new BrushConverter().ConvertFromString(value)!; brush.Freeze(); return brush; }
 
@@ -76,6 +96,8 @@ internal static class Palette
         hover.Setters.Add(new Setter(Border.BackgroundProperty, Hover, "Surface")); template.Triggers.Add(hover);
         var pressed = new Trigger { Property = System.Windows.Controls.Primitives.ButtonBase.IsPressedProperty, Value = true };
         pressed.Setters.Add(new Setter(Border.BackgroundProperty, Selected, "Surface")); template.Triggers.Add(pressed);
+        var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+        disabled.Setters.Add(new Setter(UIElement.OpacityProperty, .35)); template.Triggers.Add(disabled);
         ButtonTemplates[Pixel] = template; return template;
     }
     public static Button Button(object content, Action action, string? name = null)
@@ -83,7 +105,7 @@ internal static class Palette
         var button = new Button
         {
             Content = content, Foreground = Ink, Background = Brushes.Transparent,
-            Padding = new Thickness(8), BorderThickness = new Thickness(0),
+            Padding = new Thickness(10, 8, 10, 8), BorderThickness = new Thickness(0), FontFamily = BrandFont, FontSize = 12,
             Cursor = System.Windows.Input.Cursors.Hand, Focusable = false, Template = ButtonTemplate()
         };
         if (name != null) { button.ToolTip = name; System.Windows.Automation.AutomationProperties.SetName(button, name); }
@@ -140,6 +162,22 @@ internal static class CommandIcons
             "taskManager" => "M4,20 V13 M10,20 V4 M16,20 V9 M22,20 V6",
             "selectAll" => "M3,3 H21 V21 H3 Z M7,12 L10,15 L17,8",
             "search" => "M10,3 A7,7 0 1 0 10,17 A7,7 0 1 0 10,3 M15,15 L21,21",
+            "chevronUp" => "M7,14 L12,9 L17,14",
+            "chevronDown" => "M7,10 L12,15 L17,10",
+            "chevronRight" => "M9,7 L14,12 L9,17",
+            "more" => "M5,11 V13 M12,11 V13 M19,11 V13",
+            "rectangle" => "M4,5 H20 V19 H4 Z",
+            "ellipse" => "M12,3 A9,9 0 1 0 12,21 A9,9 0 1 0 12,3",
+            "arrow" => "M5,19 L19,5 M9,5 H19 V15",
+            "pen" => "M4,20 L5,14 L16,3 L21,8 L10,19 Z M13,6 L18,11 M5,14 L10,19",
+            "text" => "M4,5 H20 M12,5 V20 M8,20 H16 M4,5 V8 M20,5 V8",
+            "redo" => "M14,5 L21,12 L14,19 M21,12 H10 A6,6 0 0 0 4,18",
+            "record" => "M12,5 A7,7 0 1 0 12,19 A7,7 0 1 0 12,5",
+            "pause" => "M8,5 V19 M16,5 V19",
+            "stop" => "M5,5 H19 V19 H5 Z",
+            "play" => "M7,4 L20,12 L7,20 Z",
+            "focus" => "M4,9 V4 H9 M15,4 H20 V9 M20,15 V20 H15 M9,20 H4 V15 M9,12 H15",
+            "star" => "M12,3 L15,9 L22,10 L17,15 L18,22 L12,18 L6,22 L7,15 L2,10 L9,9 Z",
             _ => "M5,3 H15 L20,8 V21 H5 Z M14,3 V9 H20 M8,13 H16 M8,17 H14"
         };
         var group = new DrawingGroup();

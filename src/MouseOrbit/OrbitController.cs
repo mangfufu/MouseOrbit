@@ -1,4 +1,5 @@
 using System.Threading.Tasks;
+using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Threading;
 
@@ -25,7 +26,9 @@ internal sealed class OrbitController : IDisposable
     private readonly MouseInputBridge _inputBridge;
     private readonly GlobalInput _input;
     private readonly System.Windows.Forms.NotifyIcon _tray;
-    private readonly System.Windows.Forms.ToolStripMenuItem _focusItem;
+    private readonly MenuItem _focusItem;
+    private readonly ContextMenu _trayMenu;
+    private readonly System.Drawing.Icon _trayIcon;
     private readonly DispatcherTimer _timer;
     private bool _wheel, _heldTrigger, _heldRight, _consumeLeftUp, _gestureCanceled;
     private bool _consumeRightUp, _disposed, _autoFocus, _lastPaused, _wheelFromHold;
@@ -62,19 +65,21 @@ internal sealed class OrbitController : IDisposable
         _quick.ToolRequested += id => _ = Tool(id);
         _quick.RemoveRecentRequested = entry => RemoveRecentEntry?.Invoke(entry) == true;
         _quick.RemoveFrequentRequested = entry => RemoveFrequentEntry?.Invoke(entry) == true;
-        _tray = new System.Windows.Forms.NotifyIcon { Icon = System.Drawing.SystemIcons.Application, Text = "MouseOrbit", Visible = true };
-        var menu = new System.Windows.Forms.ContextMenuStrip();
-        menu.Items.Add("窗口切换", null, (_, _) => OpenAssistant());
-        _focusItem = new System.Windows.Forms.ToolStripMenuItem("专注模式") { Checked = Settings.ManualFocus };
+        _trayIcon = Ui.TrayIcon(); _tray = new System.Windows.Forms.NotifyIcon { Icon = _trayIcon, Text = "MouseOrbit", Visible = true };
+        var menu = Ui.Menu(_quick); _trayMenu = menu;
+        void Add(string title, string icon, Action action)
+        {
+            var item = new MenuItem { Header = title, Icon = new UiIcon { Kind = icon, Width = 16, Height = 16 } };
+            item.Click += (_, _) => action(); menu.Items.Add(item);
+        }
+        Add("窗口切换", "window", () => OpenAssistant());
+        _focusItem = new MenuItem { Header = "专注模式", IsChecked = Settings.ManualFocus, Icon = new UiIcon { Kind = "focus" } };
         _focusItem.Click += (_, _) => TogglePause(); menu.Items.Add(_focusItem);
-        var themes = new System.Windows.Forms.ToolStripMenuItem("主题");
-        foreach (var preset in ThemePresets.All)
-        { string selected = preset.Id; themes.DropDownItems.Add(preset.Name, null, (_, _) => ChangeTheme(selected)); }
-        menu.Items.Add(themes);
-        menu.Items.Add("截图 / GIF", null, (_, _) => _ = Tool("capture"));
-        menu.Items.Add("设置", null, (_, _) => OpenSettings());
-        menu.Items.Add("退出", null, (_, _) => Application.Current.Shutdown());
-        _tray.ContextMenuStrip = menu; _tray.DoubleClick += (_, _) => OpenAssistant();
+        Add("截图 / GIF", "screenshot", () => _ = Tool("capture"));
+        Add("设置", "settings", OpenSettings);
+        Add("退出", "close", () => Application.Current.Shutdown());
+        _tray.MouseClick += (_, e) => { if (e.Button == System.Windows.Forms.MouseButtons.Right) { menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint; menu.IsOpen = true; } };
+        _tray.DoubleClick += (_, _) => OpenAssistant();
         _capture.Error += Report;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
         _timer.Tick += (_, _) => Tick(); _timer.Start();
@@ -114,7 +119,7 @@ internal sealed class OrbitController : IDisposable
         if (Paused != _lastPaused)
         {
             _lastPaused = Paused; if (Paused) Cancel();
-            _focusItem.Checked = Settings.ManualFocus;
+            _focusItem.IsChecked = Settings.ManualFocus;
             _tray.Text = Paused ? (Settings.ManualFocus ? "MouseOrbit · 专注模式" : "MouseOrbit · 游戏／全屏专注") : "MouseOrbit";
             Report(Paused ? "专注模式" : "");
         }
@@ -125,7 +130,7 @@ internal sealed class OrbitController : IDisposable
             BeginWheel(_origin, true);
         if (_wheel)
         {
-            if (_wheelFromHold && WheelMath.Sector((_latest.X - _origin.X) / _triggerScale, (_latest.Y - _origin.Y) / _triggerScale, 55) < 0)
+            if (_wheelFromHold && !HoldMoved(_latest, _origin))
             { if (_orbit.Visual.Selected != -1) { _orbit.Visual.Selected = -1; _orbit.Visual.InvalidateVisual(); } }
             else _orbit.Update(_latest);
         }
@@ -188,7 +193,7 @@ internal sealed class OrbitController : IDisposable
                     if (!_wheel) BeginWheel(origin, true);
                     _wheel = false;
                     // At a screen edge the wheel center moves inward. A stationary hold is still a cancellation.
-                    bool moved = WheelMath.Sector((point.X - origin.X) / _triggerScale, (point.Y - origin.Y) / _triggerScale, 55) >= 0;
+                    bool moved = HoldMoved(point, origin);
                     if (moved) FinishWheel(point); else _orbit.Hide();
                 }
                 _wheelFromHold = false;
@@ -223,6 +228,7 @@ internal sealed class OrbitController : IDisposable
         }
         if (_quick.IsVisible || _quickPending)
         {
+            if (message == 0x20A) { _quick.ScrollWheel(unchecked((short)(data.Mouse >> 16))); return true; }
             if (message == 0x204) { _consumeRightUp = true; Queue(() => { CancelQuickOpen(); _quick.Hide(); }); return true; }
             if (message == 0x201 && !_quick.Contains(data.Pt)) Queue(() => { CancelQuickOpen(); _quick.Hide(); });
         }
@@ -424,11 +430,16 @@ internal sealed class OrbitController : IDisposable
         var chosen = id == null ? ThemePresets.All[(Array.IndexOf(ThemePresets.All, current) + 1) % ThemePresets.All.Length] : ThemePresets.Find(id);
         Settings.Theme = chosen.Id; Settings.DarkTheme = chosen.Dark; Palette.Apply(chosen.Id); Save();
     }
-    public void TogglePause() { Settings.ManualFocus = !Settings.ManualFocus; _focusItem.Checked = Settings.ManualFocus; if (Paused) Cancel(); Save(); Report(Settings.ManualFocus ? "专注模式" : ""); }
+    private bool HoldMoved(Native.Point point, Native.Point origin)
+    {
+        double dx = (point.X - origin.X) / _triggerScale, dy = (point.Y - origin.Y) / _triggerScale;
+        return Palette.Spatial ? SpatialWheel.HoldMoved(dx, dy) : WheelMath.Sector(dx, dy, OrbitVisual.DeadZone) >= 0;
+    }
+    public void TogglePause() { Settings.ManualFocus = !Settings.ManualFocus; _focusItem.IsChecked = Settings.ManualFocus; if (Paused) Cancel(); Save(); Report(Settings.ManualFocus ? "专注模式" : ""); }
     public void Save()
     { PublishInputContext(); try { Settings.Save(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Report("设置保存失败：" + ex.Message); } }
     public void OpenSettings() { CancelQuickOpen(); _quick.Hide(); Application.Current.MainWindow.Show(); Application.Current.MainWindow.WindowState = WindowState.Normal; Application.Current.MainWindow.Activate(); PublishInputContext(); }
     private void Report(string text) { LastStatus = text; Status?.Invoke(text); }
     public void Dispose()
-    { _disposed = true; _timer.Stop(); _input.Dispose(); _capture.Dispose(); _graphics.Dispose(); _feedback.Dispose(); _tray.Visible = false; _tray.ContextMenuStrip?.Dispose(); _tray.Dispose(); _orbit.Close(); _quick.Close(); }
+    { _disposed = true; _timer.Stop(); _input.Dispose(); _capture.Dispose(); _graphics.Dispose(); _feedback.Dispose(); _trayMenu.IsOpen = false; _tray.Visible = false; _tray.Dispose(); _trayIcon.Dispose(); _orbit.Close(); _quick.Close(); }
 }

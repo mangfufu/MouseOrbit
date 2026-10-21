@@ -14,11 +14,12 @@ internal sealed class OrbitWindow : Window
         Title = "MouseOrbit · 轮盘"; Width = Height = 420;
         WindowStyle = WindowStyle.None; AllowsTransparency = true; Background = Brushes.Transparent;
         ShowInTaskbar = false; ShowActivated = false; Topmost = true; ResizeMode = ResizeMode.NoResize;
-        Content = Visual;
+        Ui.Install(this); Content = Visual;
         SourceInitialized += (_, _) => Native.OverlayStyle(this, true);
     }
     public void Open(Native.Point point, Preferences preferences, bool gesture = false, int page = 0, bool holdToSelect = false, bool targetPinned = false)
     {
+        if (!IsVisible) BackdropTone.Adapt(point);
         HoldToSelect = holdToSelect;
         Visual.Settings = preferences; Visual.Page = page; Visual.GestureMode = gesture; Visual.Pattern = ""; Visual.Selected = -1; Visual.Trail.Clear();
         Visual.TargetPinned = targetPinned;
@@ -34,14 +35,14 @@ internal sealed class OrbitWindow : Window
         Native.Position(this, x, y);
         CenterPixels = new(x + half, y + half);
         Show();
-        Visual.Opacity = 1;
+        Ui.Enter(Visual, 4);
         Visual.InvalidateVisual();
     }
     public void Update(Native.Point point, string? pattern = null)
     {
         var dx = (point.X - CenterPixels.X) / Scale;
         var dy = (point.Y - CenterPixels.Y) / Scale;
-        int selected = !HoldToSelect && dx * dx + dy * dy > 205 * 205 ? -1 : WheelMath.Sector(dx, dy, 55);
+        int selected = Palette.Spatial ? SpatialWheel.Hit(Palette.Layout, dx, dy) : !HoldToSelect && dx * dx + dy * dy > 205 * 205 ? -1 : WheelMath.Sector(dx, dy, OrbitVisual.DeadZone);
         if (pattern == null && Visual.Selected == selected) return;
         Visual.Selected = selected;
         if (pattern != null)
@@ -56,6 +57,23 @@ internal sealed class OrbitWindow : Window
 
 public sealed class OrbitVisual : FrameworkElement
 {
+    internal const double DeadZone = 96;
+    private static readonly Geometry[] Sectors = Enumerable.Range(0, 8).Select(Sector).ToArray();
+    private static Point Polar(double radius, double degrees)
+    { double angle = degrees * Math.PI / 180; return new(210 + radius * Math.Cos(angle), 210 + radius * Math.Sin(angle)); }
+    private static Geometry Sector(int index)
+    {
+        double center = index * 45 - 90, start = center - 21.2, end = center + 21.2;
+        var geometry = new StreamGeometry();
+        using (var path = geometry.Open())
+        {
+            path.BeginFigure(Polar(164, start), true, true);
+            path.ArcTo(Polar(164, end), new Size(164, 164), 0, false, SweepDirection.Clockwise, true, false);
+            path.LineTo(Polar(98, end), true, false);
+            path.ArcTo(Polar(98, start), new Size(98, 98), 0, false, SweepDirection.Counterclockwise, true, false);
+        }
+        geometry.Freeze(); return geometry;
+    }
     public OrbitVisual()
     {
         Loaded += (_, _) => Palette.Changed += InvalidateVisual;
@@ -72,7 +90,7 @@ public sealed class OrbitVisual : FrameworkElement
     private static SolidColorBrush TileBrush(bool selected)
     {
         var surface = Palette.Surface.Color; var accent = Palette.Accent.Color;
-        byte Tint(byte source, byte ink) => (byte)Math.Round(source * .78 + ink * .22);
+        byte Tint(byte source, byte ink) => (byte)Math.Round(source * .84 + ink * .16);
         var color = selected ? Color.FromArgb(surface.A, Tint(surface.R, accent.R), Tint(surface.G, accent.G), Tint(surface.B, accent.B)) : surface;
         var brush = new SolidColorBrush(color); brush.Freeze(); return brush;
     }
@@ -97,21 +115,29 @@ public sealed class OrbitVisual : FrameworkElement
             Text(dc, label, 12, Palette.Muted, 210, 225);
             dc.Pop(); dc.Pop(); return;
         }
-        // Keep the eight tiles separate. Hover changes RGB, never their alpha or geometry.
+        if (Palette.Spatial) { SpatialWheel.Draw(dc, this, Text); dc.Pop(); return; }
+        // Eight generous sectors share one open ring. Selection preserves alpha and hit targets.
         var idle = TileBrush(false); var hover = TileBrush(true);
         for (int i = 0; i < 8; i++)
         {
             double angle = (i * 45 - 90) * Math.PI / 180;
-            var p = new System.Windows.Point(210 + 138 * Math.Cos(angle), 210 + 138 * Math.Sin(angle));
+            var p = new System.Windows.Point(210 + 127 * Math.Cos(angle), 210 + 127 * Math.Sin(angle));
             bool active = i == Selected;
-            var rect = new Rect(p.X - 38, p.Y - 38, 76, 76);
-            double radius = Palette.Pixel ? 1 : Palette.Current.Radius;
-            dc.DrawRoundedRectangle(active ? hover : idle, new Pen(Palette.Edge, 1), rect, radius, radius);
+            dc.DrawGeometry(active ? hover : idle, new Pen(Palette.Edge, .8), Sectors[i]);
+            dc.PushClip(Sectors[i]);
+            // A single shallow lighting change suggests a folded plane without warping its content.
+            var sheen = new LinearGradientBrush(Color.FromArgb(Palette.Dark ? (byte)12 : (byte)26, 255, 255, 255), Colors.Transparent, new Point(0, 0), new Point(1, .85));
+            dc.DrawRectangle(sheen, null, Sectors[i].Bounds); dc.Pop();
+            var edgeColor = active ? Palette.Accent.Color : Palette.Muted.Color;
+            var rim = new StreamGeometry();
+            using (var path = rim.Open())
+            { path.BeginFigure(Polar(164, i * 45 - 96), false, false); path.ArcTo(Polar(164, i * 45 - 84), new Size(164, 164), 0, false, SweepDirection.Clockwise, true, false); }
+            dc.DrawGeometry(null, new Pen(new SolidColorBrush(Color.FromArgb(100, edgeColor.R, edgeColor.G, edgeColor.B)), 1), rim);
             var command = Commands.Find(Settings.Wheel[i]);
-            dc.DrawImage(CommandIcons.Get(command.Id), new Rect(p.X - 12, p.Y - 22, 24, 24));
+            dc.DrawImage(CommandIcons.Get(command.Id), new Rect(p.X - 11, p.Y - 21, 22, 22));
             bool pinned = command.Id == "topmost" && TargetPinned;
-            if (pinned) dc.DrawEllipse(Palette.Accent, null, new Point(rect.Right - 8, rect.Top + 8), 3, 3);
-            Text(dc, pinned ? "取消置顶" : command.Name, 10.5, Palette.Ink, p.X, p.Y + 20);
+            if (pinned) dc.DrawEllipse(Palette.Accent, null, new Point(p.X + 22, p.Y - 21), 2.5, 2.5);
+            Text(dc, pinned ? "取消置顶" : command.Name, 11, Palette.Ink, p.X, p.Y + 18);
         }
         dc.Pop();
     }

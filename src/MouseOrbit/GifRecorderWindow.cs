@@ -17,7 +17,7 @@ internal sealed class GifRecorderWindow : Window
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(FrameMilliseconds) };
     private readonly CheckBox _cursor = new() { Content = "显示鼠标", IsChecked = true, Foreground = Palette.Ink, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 8, 0) };
     private readonly Stopwatch _watch = new();
-    private readonly TextBlock _clock = new() { Text = "GIF 00:00", FontFamily = Palette.PixelFont, FontSize = 22, Foreground = Palette.Accent, VerticalAlignment = VerticalAlignment.Center, Width = 112 };
+    private readonly TextBlock _clock = new() { Text = "GIF 00:00", FontFamily = Palette.BrandFont, FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Palette.Ink, VerticalAlignment = VerticalAlignment.Center, Width = 82 };
     private readonly Button _start, _pause, _stop;
     private AnimatedGifWriter? _writer;
     private Task _frame = Task.CompletedTask;
@@ -29,16 +29,16 @@ internal sealed class GifRecorderWindow : Window
     public event Action<string>? Failed;
     public GifRecorderWindow(System.Drawing.Rectangle region)
     {
-        _region = region; Width = 420; Height = 58;
+        _region = region; Width = 472; Height = 64; Ui.Install(this);
         _outline = new RecordingOutline(region);
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize; AllowsTransparency = true; Background = Brushes.Transparent; ShowInTaskbar = false; ShowActivated = false; Topmost = true;
         var panel = new StackPanel { Orientation = Orientation.Horizontal }; panel.Children.Add(_clock);
         panel.Children.Add(_cursor);
-        _start = Palette.Button("开始", () => _ = Begin(), "开始录制"); panel.Children.Add(_start);
-        _pause = Palette.Button("暂停", Pause, "暂停或继续"); _pause.IsEnabled = false; panel.Children.Add(_pause);
-        _stop = Palette.Button("结束", () => _ = Stop(), "结束并预览"); _stop.IsEnabled = false; panel.Children.Add(_stop);
-        panel.Children.Add(Palette.Button("取消", Cancel, "取消录制"));
-        Content = new Border { Background = Palette.Paper, BorderBrush = Palette.Edge, BorderThickness = new Thickness(1), Padding = new Thickness(10), Child = panel };
+        _start = Ui.Action("record", "开始", () => _ = Begin(), "开始录制"); panel.Children.Add(_start);
+        _pause = Ui.Action("pause", "暂停", Pause, "暂停或继续"); _pause.IsEnabled = false; panel.Children.Add(_pause);
+        _stop = Ui.Action("stop", "结束", () => _ = Stop(), "结束并预览"); _stop.IsEnabled = false; panel.Children.Add(_stop);
+        panel.Children.Add(Ui.Icon("close", Cancel, "取消录制"));
+        var shell = Ui.Shell(panel, new Thickness(12), 16); shell.Margin = new Thickness(4); Content = shell;
         SourceInitialized += (_, _) => Native.OverlayStyle(this, false);
         Closing += (_, e) => { if (!_ending) { e.Cancel = true; Cancel(); } };
         Closed += (_, _) => _outline.Close();
@@ -93,7 +93,7 @@ internal sealed class GifRecorderWindow : Window
     }
     private void Pause()
     {
-        if (!_running || _ending) return; _paused = !_paused; _pause.Content = _paused ? "继续" : "暂停";
+        if (!_running || _ending) return; _paused = !_paused; _pause.Content = Ui.Label(_paused ? "play" : "pause", _paused ? "继续" : "暂停");
         if (_paused) _watch.Stop(); else _watch.Start();
         _outline.Recording(!_paused);
     }

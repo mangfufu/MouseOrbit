@@ -29,13 +29,13 @@ internal static class CaptureFeatureChecks
             var plain = OffscreenPreview.Render(visual, 420, 420); var before = Pixels(plain);
             visual.Selected = 1; visual.InvalidateVisual(); var selected = OffscreenPreview.Render(visual, 420, 420); var after = Pixels(selected);
             Check(Pixel(selected, 210, 210).A == 0 && Pixel(selected, 210, 150).A == 0, "wheel center and gaps remain fully transparent: " + theme.Id);
-            Check(Pixel(selected, 210, 50).A is > 200 and < 255 && Pixel(selected, 285, 90).A == Pixel(plain, 285, 90).A, "tiles stay translucent at the same alpha on hover: " + theme.Id);
+            Check(Pixel(selected, 230, 80).A is > 200 and < 255 && Pixel(selected, 285, 90).A == Pixel(plain, 285, 90).A, "tiles stay translucent at the same alpha on hover: " + theme.Id);
             Check(Enumerable.Range(0, before.Length / 4).All(i => before[i * 4 + 3] == after[i * 4 + 3]), "hover never changes wheel transparency or geometry: " + theme.Id);
             Check(!before.SequenceEqual(after), "hover changes wheel color: " + theme.Id);
-            if (theme.Id == "pixel-light") ScreenPixels.SavePng(selected, "output/qa/wheel-translucent.png");
+            if (theme.Id == "typefield") ScreenPixels.SavePng(selected, "output/qa/wheel-translucent.png");
             visual.TargetPinned = true; visual.InvalidateVisual(); var pinned = OffscreenPreview.Render(visual, 420, 420);
             Check(!Pixels(pinned).SequenceEqual(after), "pinned target has a visible wheel state: " + theme.Id);
-            if (theme.Id == "pixel-light") ScreenPixels.SavePng(pinned, "output/qa/wheel-pinned.png");
+            if (theme.Id == "typefield") ScreenPixels.SavePng(pinned, "output/qa/wheel-pinned.png");
         }
         Palette.Apply(themeBefore);
         var first = RedesignChecks.Solid(160, 90, Colors.White); var second = RedesignChecks.Solid(160, 90, Colors.Blue);
@@ -88,7 +88,7 @@ internal static class CaptureFeatureChecks
                 OffscreenPreview.Render(root, 520, 360);
                 ButtonFor(root, "暂停并标注整段 GIF").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Check(preview.Surface.IsHitTestVisible, "GIF annotation mode enables drawing");
-                Check(Descendants<Button>(root).Any(b => b.Visibility == Visibility.Visible && (string?)b.Content == "箭头"), "GIF editor exposes annotation tools");
+                Check(Descendants<Button>(root).Any(b => b.Visibility == Visibility.Visible && System.Windows.Automation.AutomationProperties.GetName(b) == "箭头"), "GIF editor exposes annotation tools");
                 ScreenPixels.SavePng(OffscreenPreview.Render(root, 520, 420), "output/qa/gif-editor.png");
             }
             finally { preview.Close(); }
@@ -107,7 +107,7 @@ internal static class CaptureFeatureChecks
                 var cursor = Descendants<CheckBox>((DependencyObject)recorder.Content).Single();
                 Check(cursor.IsChecked == true && (string?)cursor.Content == "显示鼠标", "recording enables cursor visibility by default");
                 cursor.IsChecked = false; Check(cursor.IsChecked == false, "cursor visibility can be disabled");
-                ScreenPixels.SavePng(OffscreenPreview.Render((FrameworkElement)recorder.Content, 420, 58), "output/qa/gif-recorder.png");
+                ScreenPixels.SavePng(OffscreenPreview.Render((FrameworkElement)recorder.Content, (int)recorder.Width, (int)recorder.Height), "output/qa/gif-recorder.png");
             }
             finally { recorder.Cancel(); }
         }

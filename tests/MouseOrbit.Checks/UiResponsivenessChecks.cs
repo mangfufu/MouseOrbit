@@ -29,7 +29,11 @@ internal static class UiResponsivenessChecks
         var entries = Enumerable.Range(0, 40).Select(i => new DesktopEntry("perf:" + i, "项目 " + i, "", "command", "downloads", "↓")).ToArray();
         var snapshot = new Dictionary<string, IReadOnlyList<DesktopEntry>> { ["frequent"] = entries[..24], ["recent"] = entries };
         Button Button(string name) => Visible<Button>(panel).Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == name);
-        void Click(string name) { Button(name).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent)); Pump(); }
+        void Click(string name)
+        {
+            if (name is "窗口" or "常用" or "最近") panel.SelectCategory(name == "窗口" ? "windows" : name == "常用" ? "frequent" : "recent");
+            else Button(name).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent)); Pump();
+        }
         try
         {
             panel.Open(new Native.Point { X = 400, Y = 300 }, snapshot); Pump(); Click("常用");
@@ -120,21 +124,19 @@ internal static class UiResponsivenessChecks
                     new[] { new SwitchWindow(window, (uint)Environment.ProcessId, "live:" + i, "测试", "源窗口", false, 1, i) })).ToArray());
                 thumbnailWindow.Open(new Native.Point { X = 600, Y = 300 }, new()); Pump();
                 var tile = Visible<Button>(thumbnailWindow).Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == "实时预览 0");
-                var location = tile.PointToScreen(new(50, 35));
-                bool White(Point at)
-                {
-                    using var pixelImage = new System.Drawing.Bitmap(1, 1); var until = Environment.TickCount64 + 500; System.Drawing.Color sample;
-                    do { Pump(); DwmFlush(); Capture(pixelImage, (int)at.X, (int)at.Y); sample = pixelImage.GetPixel(0, 0); }
-                    while ((sample.R < 245 || sample.G < 245 || sample.B < 245) && Environment.TickCount64 < until);
-                    return sample.R >= 245 && sample.G >= 245 && sample.B >= 245;
-                }
-                Check(White(location), "real window cards display DWM live thumbnails on the translucent panel");
-                Visible<Button>(thumbnailWindow).Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == "最近").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent)); Pump();
-                Check(!White(location), "changing pages removes native previews along with their WPF cards");
-                Visible<Button>(thumbnailWindow).Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == "窗口").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent)); Pump();
+                Check(Visible<EntryIcon>(tile).Count() == 1 && thumbnailWindow.Width <= QuickPanelWindow.PreferredSize.Width, "real window uses a native icon within the current compact panel width");
+                thumbnailWindow.SelectCategory("recent"); Pump();
+                Check(!Visible<Button>(thumbnailWindow).Contains(tile), "changing category hides the previous rail entries");
+                thumbnailWindow.SelectCategory("windows"); Pump();
                 var viewport = Visible<ScrollViewer>(thumbnailWindow).Single(); viewport.ScrollToBottom(); thumbnailWindow.UpdateLayout(); Pump();
                 var last = Visible<Button>(thumbnailWindow).Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == "实时预览 15");
-                Check(White(last.PointToScreen(new(50, 35))), "scrolling moves live thumbnails to the visible window cards");
+                var lastBounds = last.TransformToAncestor(viewport).TransformBounds(new Rect(last.RenderSize));
+                Check(lastBounds.Top < viewport.ActualHeight && lastBounds.Bottom > 0, "scrolling reaches the final window icon");
+                DesktopEntry? selected = null; thumbnailWindow.Selected += entry => selected = entry;
+                var foreground = Native.GetForegroundWindow();
+                last.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent)); Pump();
+                Check(selected?.Target == window.ToString() && !thumbnailWindow.IsVisible && Native.GetForegroundWindow() == foreground,
+                    "icon selection retains the exact original window handle and hides the rail without stealing focus");
                 thumbnailWindow.Hide(); Pump();
             }
             finally { thumbnailWindow.Close(); }

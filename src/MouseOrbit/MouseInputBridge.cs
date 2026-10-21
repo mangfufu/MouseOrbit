@@ -67,7 +67,7 @@ internal sealed class MouseInputBridge
             { _rightUp = true; captured = notify = true; }
             else if (_right && message == 0x201)
             { _leftUp = true; captured = notify = true; }
-            else if (message == 0x20A && (_trigger || context.WheelOpen)) captured = notify = true;
+            else if (message == 0x20A && (_trigger || context.WheelOpen || context.QuickOpen)) captured = notify = true;
             else if (context.WheelOpen && message is 0x201 or 0x204)
             { if (message == 0x201) _leftUp = true; else _rightUp = true; captured = notify = true; }
             else if (trigger && !_right && !_trigger)

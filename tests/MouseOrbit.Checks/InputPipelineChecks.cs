@@ -55,7 +55,10 @@ internal static class InputPipelineChecks
         var own = new MouseInputBridge(() => { }, new(), () => 42, _ => 42, _ => true); own.Publish(normal);
         Check(!own.Process(0x204, Data(), 1) && !own.Process(0x205, Data(), 2) && !own.HasPending, "settings-window right clicks are not captured as global gestures");
         bridge.Publish(normal with { QuickOpen = true });
+        Check(bridge.Process(0x20A, Data(button: 120), 13990), "icon rail scrolling is captured even while the pointer remains next to the rail");
         Check(bridge.Process(0x204, Data(), 14000) && bridge.Process(0x205, Data(), 14020), "right click dismisses an open panel without leaking an unmatched release"); bridge.Drain(out _);
+        bridge.Publish(normal);
+        Check(!bridge.Process(0x20A, Data(button: 120), 14030), "normal foreground scrolling resumes immediately after the rail closes");
         bridge.Publish(normal with { WheelOpen = true });
         Check(bridge.Process(0x201, Data(), 15000) && bridge.Process(0x202, Data(), 15020), "wheel selection consumes both halves of a left click");
         Check(bridge.Process(0x20A, Data(), 15030), "wheel scrolling cannot leak to the underlying app"); bridge.Drain(out _);

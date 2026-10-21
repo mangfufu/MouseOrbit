@@ -93,8 +93,25 @@ internal static class RedesignChecks
         for (int i = 1; i < 4000; i++) path.Add(new(-1920 + i * 3, -200 + i));
         Check(path.Points.Count <= 2048 && path.Points[0] == new Point(-1920, -200) && path.Points[^1].X == -1920 + 3999 * 3, "trail retains endpoints across screens with bounded memory");
         path.Clear(); Check(path.Points.Count == 0, "release/cancel clears trail");
-        Check(ThemePresets.All.Select(t => t.Id).Distinct().Count() == 6 && ThemePresets.All.Any(t => t.Id == "glass"), "six styles retain original glass theme");
-        Check(ThemePresets.Find("unknown", true).Id == "pixel-dark", "old dark preference survives theme upgrade");
+        Check(ThemePresets.All.Select(t => t.Id).SequenceEqual(new[] { "typefield" }), "only typefield remains selectable");
+        Check(ThemePresets.Find("unknown", true).Id == "typefield", "legacy fallback migrates to typefield");
+        foreach (string old in new[] { "gravity", "glass", "graphite", "sage", "sand", "pixel-light", "pixel-dark" })
+        {
+            var original = new Preferences { Theme = old, Trigger = "XButton2" };
+            var migrated = Preferences.Normalize(original);
+            Check(migrated.Theme == "typefield" && migrated.Trigger == "XButton2" && migrated.Wheel.SequenceEqual(new Preferences().Wheel), "retired preset migrates without losing mouse mappings: " + old);
+        }
+        foreach (string id in new[] { "typefield" })
+        {
+            var settings = new Preferences { Theme = id, Trigger = "XButton2" };
+            var roundtrip = Preferences.Normalize(System.Text.Json.JsonSerializer.Deserialize<Preferences>(System.Text.Json.JsonSerializer.Serialize(settings))!);
+            Check(roundtrip.Theme == id && roundtrip.Trigger == "XButton2" && roundtrip.Wheel.SequenceEqual(settings.Wheel), "saved layout survives restart without changing mouse mappings: " + id);
+            for (int i = 0; i < 8; i++)
+            {
+                var p = SpatialWheel.LabelPosition(i); var direction = p - new Point(210, 210);
+                Check(SpatialWheel.Hit(ThemePresets.Find(id).Layout, direction.X, direction.Y + 15) == i, "visible spatial command selects its actual target: " + id + " / " + i);
+            }
+        }
         foreach (string name in new[] { "Progman", "WorkerW", "#32769", "Shell_TrayWnd", "Shell_SecondaryTrayWnd" })
             Check(WindowNative.IsDesktopClass(name), "desktop surface excluded from automatic full-screen focus: " + name);
         Check(!WindowNative.IsDesktopClass("CabinetWClass") && !WindowNative.IsDesktopClass("UnrealWindow"), "normal folders and games remain eligible for auto focus");

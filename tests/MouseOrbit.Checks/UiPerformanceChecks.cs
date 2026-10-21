@@ -47,8 +47,7 @@ internal static class UiPerformanceChecks
             var samples = new List<double>();
             foreach (string name in Enumerable.Range(0, 60).Select(i => new[] { "常用", "最近", "窗口" }[i % 3]))
             {
-                var tab = Descendants<Button>((DependencyObject)panel.Content).Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == name);
-                var watch = Stopwatch.StartNew(); tab.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); double action = watch.Elapsed.TotalMilliseconds;
+                var watch = Stopwatch.StartNew(); panel.SelectCategory(name == "窗口" ? "windows" : name == "常用" ? "frequent" : "recent"); double action = watch.Elapsed.TotalMilliseconds;
                 panel.UpdateLayout(); double layout = watch.Elapsed.TotalMilliseconds; Pump(); watch.Stop();
                 samples.Add(watch.Elapsed.TotalMilliseconds);
                 if (samples.Count <= 3) Console.WriteLine($"PERF: panel FIRST {name}: {watch.Elapsed.TotalMilliseconds:F2} ms (handler {action:F2}, layout {layout - action:F2})");
@@ -114,10 +113,9 @@ internal static class UiPerformanceChecks
             var samples = new List<double>(); var work = new List<double>();
             foreach (string name in Enumerable.Range(0, 30).Select(i => new[] { "常用", "最近", "窗口" }[i % 3]))
             {
-                var tab = Descendants<Button>(nativePanel).Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == name);
-                var watch = Stopwatch.StartNew(); tab.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); nativePanel.UpdateLayout(); work.Add(watch.Elapsed.TotalMilliseconds); Pump(); watch.Stop(); samples.Add(watch.Elapsed.TotalMilliseconds);
+                var watch = Stopwatch.StartNew(); nativePanel.SelectCategory(name == "窗口" ? "windows" : name == "常用" ? "frequent" : "recent"); nativePanel.UpdateLayout(); work.Add(watch.Elapsed.TotalMilliseconds); Pump(); watch.Stop(); samples.Add(watch.Elapsed.TotalMilliseconds);
             }
-            Console.WriteLine($"PERF: panel with 12 DWM previews, 30 switches: handler+layout max {work.Max():F2} ms; dispatcher p95 {samples.OrderBy(value => value).ElementAt(28):F2} ms, max {samples.Max():F2} ms");
+            Console.WriteLine($"PERF: rail with 12 native window icons, 30 switches: handler+layout max {work.Max():F2} ms; dispatcher p95 {samples.OrderBy(value => value).ElementAt(28):F2} ms, max {samples.Max():F2} ms");
         }
         finally { nativePanel.Close(); }
         using var trail = new PointerTrail(); var hint = new GestureHint();

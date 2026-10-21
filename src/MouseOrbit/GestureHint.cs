@@ -32,7 +32,10 @@ internal sealed class GestureHint : IDisposable
             using var muted = new System.Drawing.SolidBrush(ColorOf(colors.Muted));
             using var edge = new System.Drawing.Pen(ColorOf(colors.Edge), 1);
             using var format = new System.Drawing.StringFormat { Trimming = System.Drawing.StringTrimming.EllipsisCharacter, FormatFlags = System.Drawing.StringFormatFlags.NoWrap };
-            graphics.FillRectangle(background, 0, 0, 270, 67); graphics.DrawRectangle(edge, .5f, .5f, 269, 66);
+            using var shape = new System.Drawing.Drawing2D.GraphicsPath();
+            shape.AddArc(.5f, .5f, 24, 24, 180, 90); shape.AddArc(245.5f, .5f, 24, 24, 270, 90);
+            shape.AddArc(245.5f, 42.5f, 24, 24, 0, 90); shape.AddArc(.5f, 42.5f, 24, 24, 90, 90); shape.CloseFigure();
+            graphics.FillPath(background, shape); graphics.DrawPath(edge, shape);
             graphics.DrawString(name, _nameFont, ink, new System.Drawing.RectangleF(12, 9, 246, 22), format);
             graphics.DrawString(title, _titleFont, muted, new System.Drawing.RectangleF(12, 34, 246, 20), format);
         }, show);

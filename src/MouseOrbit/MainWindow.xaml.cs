@@ -30,7 +30,7 @@ public partial class MainWindow : Window
         _viewSettings = settings;
         Palette.Resources(Resources);
         InitializeComponent();
-        Palette.Resources(Resources);
+        Ui.Install(this);
         Palette.Changed += ThemeChanged;
         Closed += (_, _) => Palette.Changed -= ThemeChanged;
         _wheelDraft = Enumerable.Range(0, 3).Select(p => settings.GetWheel(p).ToArray()).ToArray();
@@ -104,7 +104,7 @@ public partial class MainWindow : Window
     }
     private void UpdateStatus(string text)
     {
-        StatusText.Text = text; RunningLabel.Text = _controller.Paused ? "● 专注中" : "● 运行中";
+        StatusText.Text = text; RunningLabel.Text = _controller.Paused ? "专注中" : "运行中";
         PauseButton.Content = _controller.ManualFocus ? "退出专注" : "专注模式";
         LoadFocusApps();
         AssistantStatus.Text = text;
@@ -112,17 +112,6 @@ public partial class MainWindow : Window
     private void Preview_Click(object sender, RoutedEventArgs e) => _controller.ShowWheel();
     private void Pause_Click(object sender, RoutedEventArgs e) => _controller.TogglePause();
     private void ThemeChanged() { Palette.Resources(Resources); Preview.InvalidateVisual(); }
-    private void Theme_Click(object sender, RoutedEventArgs e)
-    {
-        var menu = new ContextMenu { Background = Palette.Paper, Foreground = Palette.Ink, BorderBrush = Palette.Edge, PlacementTarget = (Button)sender };
-        foreach (var preset in ThemePresets.All)
-        {
-            string id = preset.Id;
-            var item = new MenuItem { Header = preset.Name, IsChecked = id == Palette.Current.Id, Foreground = Palette.Ink };
-            item.Click += (_, _) => _controller.ChangeTheme(id); menu.Items.Add(item);
-        }
-        menu.IsOpen = true;
-    }
     private void LoadFocusApps()
     {
         FocusAppRows.Children.Clear();

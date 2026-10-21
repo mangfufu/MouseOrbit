@@ -37,38 +37,68 @@ internal static class OffscreenPreview
         var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using var stream = File.Create(Path.Combine(Output, name)); encoder.Save(stream);
     }
+    private static BitmapSource RenderMenu(ContextMenu menu)
+    {
+        menu.Measure(new Size(178, 400));
+        return Render(menu, 178, (int)Math.Clamp(Math.Ceiling(menu.DesiredSize.Height), 1, 400));
+    }
+    private static BitmapSource OnBackdrop(BitmapSource overlay, bool dark)
+    {
+        var view = new DrawingVisual();
+        using (var dc = view.RenderOpen())
+        {
+            dc.DrawRectangle(new SolidColorBrush(dark ? Color.FromRgb(24, 26, 29) : Color.FromRgb(250, 250, 248)), null, new Rect(0, 0, overlay.PixelWidth, overlay.PixelHeight));
+            dc.DrawImage(overlay, new Rect(0, 0, overlay.PixelWidth, overlay.PixelHeight));
+        }
+        var bitmap = new RenderTargetBitmap(overlay.PixelWidth, overlay.PixelHeight, 96, 96, PixelFormats.Pbgra32); bitmap.Render(view); return bitmap;
+    }
     private static BitmapSource Board(BitmapSource panel, BitmapSource wheel, bool dark)
     {
         var visual = new DrawingVisual();
         using (var dc = visual.RenderOpen())
         {
-            dc.DrawRectangle(new SolidColorBrush(dark ? Color.FromRgb(19, 19, 17) : Color.FromRgb(222, 217, 204)), null, new Rect(0, 0, 1400, 720));
-            dc.DrawImage(panel, new Rect(32, 86, panel.Width, panel.Height));
-            dc.DrawImage(wheel, new Rect(934, 145, wheel.Width, wheel.Height));
+            dc.DrawRectangle(new SolidColorBrush(dark ? Color.FromRgb(51, 65, 77) : Color.FromRgb(192, 204, 212)), null, new Rect(0, 0, 1280, 800));
+            // Crisp fixture work windows: overlay readability is judged on content, not a blurred wallpaper.
+            dc.DrawImage(SampleWindow(3, dark), new Rect(55, 105, 745, 435));
+            dc.DrawImage(SampleWindow(5, dark), new Rect(650, 250, 565, 330));
+            dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(160, 30, 39, 46)), null, new Rect(0, 756, 1280, 44));
+            dc.DrawImage(panel, new Rect(355, 198, panel.Width, panel.Height));
+            dc.DrawImage(wheel, new Rect(690, 120, wheel.Width, wheel.Height));
+            var pointer = Geometry.Parse("M0,0 L0,19 L5,14 L9,23 L13,21 L9,13 L16,13 Z");
+            dc.PushTransform(new TranslateTransform(330, 375)); dc.DrawGeometry(Brushes.White, new Pen(Palette.B("#34434C"), 1), pointer); dc.Pop();
         }
-        var bitmap = new RenderTargetBitmap(1400, 720, 96, 96, PixelFormats.Pbgra32); bitmap.Render(visual); return bitmap;
+        var bitmap = new RenderTargetBitmap(1280, 800, 96, 96, PixelFormats.Pbgra32); bitmap.Render(visual); return bitmap;
     }
     private static Button Button(DependencyObject root, string name) => Descendants<Button>(root).Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == name);
-    private static void Click(DependencyObject root, string name) => Button(root, name).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
-    private static BitmapSource SampleWindow(int index)
+    private static void Click(DependencyObject root, string name)
+    {
+        if (Window.GetWindow(root) is QuickPanelWindow rail && name is "窗口" or "常用" or "最近")
+        { rail.SelectCategory(name == "窗口" ? "windows" : name == "常用" ? "frequent" : "recent"); return; }
+        Button(root, name).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+    }
+    private static BitmapSource SampleWindow(int index, bool dark = false)
     {
         var view = new DrawingVisual();
         using (var dc = view.RenderOpen())
         {
-            dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(243, 244, 240)), null, new Rect(0, 0, 480, 280));
-            dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(215, 221, 219)), null, new Rect(0, 0, 480, 27));
-            dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(234, 235, 230)), null, new Rect(0, 27, 83, 253));
+            dc.DrawRectangle(new SolidColorBrush(dark ? Color.FromRgb(32, 38, 43) : Color.FromRgb(243, 244, 240)), null, new Rect(0, 0, 480, 280));
+            dc.DrawRectangle(new SolidColorBrush(dark ? Color.FromRgb(48, 55, 61) : Color.FromRgb(215, 221, 219)), null, new Rect(0, 0, 480, 27));
+            dc.DrawRectangle(new SolidColorBrush(dark ? Color.FromRgb(39, 47, 52) : Color.FromRgb(234, 235, 230)), null, new Rect(0, 27, 83, 253));
             var colors = new[] { "#577D93", "#65907D", "#B7865E", "#89719C", "#687A93", "#6F8D9A", "#9A8559", "#658B77" };
             var accent = (Brush)new BrushConverter().ConvertFromString(colors[index % colors.Length])!;
             dc.DrawRectangle(accent, null, new Rect(101, 45, 350, 48));
-            for (int i = 0; i < 6; i++) dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(188, 194, 187)), null, new Rect(104, 113 + i * 22, i % 2 == 0 ? 325 : 252, 7));
-            for (int i = 0; i < 5; i++) dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(168, 178, 168)), null, new Rect(13, 49 + i * 29, 54, 5));
+            for (int i = 0; i < 6; i++) dc.DrawRectangle(new SolidColorBrush(dark ? Color.FromRgb(85, 97, 106) : Color.FromRgb(188, 194, 187)), null, new Rect(104, 113 + i * 22, i % 2 == 0 ? 325 : 252, 7));
+            for (int i = 0; i < 5; i++) dc.DrawRectangle(new SolidColorBrush(dark ? Color.FromRgb(91, 105, 111) : Color.FromRgb(168, 178, 168)), null, new Rect(13, 49 + i * 29, 54, 5));
         }
         var result = new RenderTargetBitmap(480, 280, 96, 96, PixelFormats.Pbgra32); result.Render(view); result.Freeze(); return result;
     }
     public static void Run()
     {
-        _ = new Application();
+        _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+
+        SpatialInteractionChecks.Run();
+        AppearanceQualityChecks.Run();
+        ParticleMotionChecks.Run();
         Directory.CreateDirectory(Output); Palette.SetTheme(false);
         var launcher = new Launcher(); launcher.Refresh();
         string[] preferred = ["Chrome", "Edge", "微信", "Visual Studio Code", "Windows Terminal", "网易云"];
@@ -86,22 +116,9 @@ internal static class OffscreenPreview
         var quick = new QuickPanelWindow(); quick.SetWindows(groups);
         quick.SetEntries(new() { ["frequent"] = apps, ["recent"] = apps, ["windows"] = [] });
         var root = (FrameworkElement)quick.Content;
-        var panel = Render(root, (int)quick.Width, (int)quick.Height);
-        if (Descendants<Button>(root).Any(b => System.Windows.Automation.AutomationProperties.GetName(b) == "GIF")) throw new Exception("Panel must have one shared capture entry");
-        if (!Descendants<Image>(root).Any(image => image.Source is BitmapSource source && source.PixelWidth == 480)) throw new Exception("Window thumbnails missing");
-        Save(panel, "pixel-panel-light.png");
         var wheelView = new OrbitVisual { Width = 420, Height = 420, Selected = 1 };
-        var wheel = Render(wheelView, 420, 420);
-        Save(Board(panel, wheel, false), "pixel-light.png");
-        Click(root, groups[0].Name);
-        Save(Render((FrameworkElement)quick.Content, (int)quick.Width, (int)quick.Height), "pixel-expanded.png");
-        if (Button(quick.Content as DependencyObject ?? quick, "返回应用").Visibility != Visibility.Visible) throw new Exception("Group must expand inline with a back action");
-        Palette.SetTheme(true); root = (FrameworkElement)quick.Content;
-        Click(root, "返回应用"); panel = Render(root, (int)quick.Width, (int)quick.Height);
-        wheelView.InvalidateVisual(); wheel = Render(wheelView, 420, 420);
-        Save(panel, "pixel-panel-dark.png"); Save(Board(panel, wheel, true), "pixel-dark.png");
-        Palette.SetTheme(false); root = (FrameworkElement)quick.Content;
-        Click(root, "最近"); Save(Render(root, (int)quick.Width, (int)quick.Height), "pixel-recent.png");
+        Click(root, "最近");
+        Render(root, (int)quick.Width, (int)quick.Height);
         bool opened = false; int removed = 0; quick.Selected += _ => opened = true;
         quick.RemoveRecentRequested = _ => { removed++; return true; };
         Descendants<Button>(root).First(b => System.Windows.Automation.AutomationProperties.GetName(b).StartsWith("从最近移除：")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
@@ -113,34 +130,122 @@ internal static class OffscreenPreview
         Render(root, (int)quick.Width, (int)quick.Height);
         if (Descendants<EntryIcon>(root).Count() != apps.Length - 1) throw new Exception("Frequent remove must update immediately");
         bool wheelRequested = false; quick.ToolRequested += id => wheelRequested = id == "wheel";
-        Click(root, "轮盘"); if (!wheelRequested) throw new Exception("Wheel must be available in fixed toolbar");
+        var wheelItem = quick.CreateMenu().Items.OfType<MenuItem>().Single(item => item.Header as string == "设置").Items.OfType<MenuItem>().Single(item => item.Header as string == "轮盘");
+        wheelItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent)); if (!wheelRequested) throw new Exception("Wheel remains available from mouse menu");
         foreach (var theme in ThemePresets.All)
         {
             Palette.Apply(theme.Id); quick.SetWindows(groups); quick.SetEntries(new() { ["frequent"] = apps, ["recent"] = apps });
             root = (FrameworkElement)quick.Content;
             wheelView.InvalidateVisual();
-            Save(Board(Render(root, 840, 544), Render(wheelView, 420, 420), theme.Dark), "theme-" + theme.Id + ".png");
+            Save(Render(root, (int)quick.Width, (int)quick.Height), "rail-" + theme.Id + ".png");
+            foreach (bool dark in new[] { false, true })
+            {
+                Palette.SetBackdropDark(dark); root = (FrameworkElement)quick.Content; wheelView.InvalidateVisual();
+                Save(OnBackdrop(Render(root, (int)quick.Width, (int)quick.Height), dark), "contrast-" + theme.Id + (dark ? "-dark.png" : "-light.png"));
+                var hovered = Button(root, groups[Math.Min(2, groups.Length - 1)].Name);
+                quick.SpatialView!.FocusRow(hovered, false);
+                var hoverImage = Render(root, (int)quick.Width, (int)quick.Height);
+                Save(OnBackdrop(hoverImage, dark), "particle-hover" + (dark ? "-dark.png" : "-light.png"));
+                quick.SpatialView.HoldMenu(true);
+                var wingImage = RenderMenu(quick.CreateMenu());
+                hoverImage = Render(root, (int)quick.Width, (int)quick.Height);
+                var composition = new DrawingVisual();
+                using (var dc = composition.RenderOpen())
+                {
+                    dc.DrawRectangle(new SolidColorBrush(dark ? Color.FromRgb(24, 26, 29) : Color.FromRgb(250, 250, 248)), null, new Rect(0, 0, 452, 424));
+                    dc.DrawImage(hoverImage, new Rect(4, 8, hoverImage.Width, hoverImage.Height));
+                    dc.DrawImage(wingImage, new Rect(248, 8 + quick.SpatialView.MenuAnchor.TransformToAncestor(root).Transform(new Point()).Y - 32, wingImage.Width, wingImage.Height));
+                }
+                var composite = new RenderTargetBitmap(452, 424, 96, 96, PixelFormats.Pbgra32); composite.Render(composition);
+                Save(composite, "particle-wing" + (dark ? "-dark.png" : "-light.png"));
+                quick.SpatialView.HoldMenu(false); quick.SpatialView.FocusRow(hovered, false, false);
+                Save(OnBackdrop(Render(wheelView, 420, 420), dark), "contrast-wheel-" + theme.Id + (dark ? "-dark.png" : "-light.png"));
+                Save(Board(Render(root, (int)quick.Width, (int)quick.Height), Render(wheelView, 420, 420), dark), "scene-" + theme.Id + (dark ? "-dark.png" : "-light.png"));
+            }
+            Palette.SetBackdropDark(false); root = (FrameworkElement)quick.Content; wheelView.InvalidateVisual();
+            var menuPreview = quick.CreateMenu();
+            Save(RenderMenu(menuPreview), "menu-" + theme.Id + ".png");
+            Save(Board(Render(root, (int)quick.Width, (int)quick.Height), Render(wheelView, 420, 420), theme.Dark), "theme-" + theme.Id + ".png");
+            if (theme.Layout != AppearanceLayout.Classic)
+            {
+                var closed = Render(root, (int)quick.Width, (int)quick.Height);
+                Click(root, groups[0].Name);
+                var frame = new DispatcherFrame(); var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
+                settle.Tick += (_, _) => { settle.Stop(); frame.Continue = false; }; settle.Start(); Dispatcher.PushFrame(frame);
+                var expanded = Render(root, (int)quick.Width, (int)quick.Height);
+                Save(expanded, "interaction-" + theme.Id + "-expanded.png");
+                using (var gif = new AnimatedGifWriter(File.Create(Path.Combine(Output, "interaction-" + theme.Id + ".gif")))) { gif.Add(closed, 900); gif.Add(expanded, 1500); }
+                Click(root, groups[0].Name);
+            }
             if (Palette.Surface.Color.A >= 245 || Palette.Ink.Color.A != 255) throw new Exception("Theme must keep background translucent and text solid: " + theme.Id);
         }
-        Palette.Apply("glass"); root = (FrameworkElement)quick.Content; Click(root, "选择主题");
-        Save(Render(root, 840, 544), "theme-picker.png");
-        string selectedTheme = ""; quick.ToolRequested += id => { if (id.StartsWith("theme:")) selectedTheme = id[6..]; };
-        Click(root, "半透明 · 鼠尾草"); if (selectedTheme != "sage") throw new Exception("Theme picker must be mouse operable");
+        // A matched five-app fixture makes the material comparison independent of installed app names.
+        var studyNames = new[] { ("Chrome", "Chrome"), ("Edge", "Edge"), ("微信", "微信"), ("Code", "Code"), ("资源", "文件") };
+        var studyGroups = studyNames.Select(pair => groups.FirstOrDefault(g => g.Name.Contains(pair.Item1, StringComparison.OrdinalIgnoreCase)) is { } found ? found with { Name = pair.Item2 } : null).OfType<SwitchGroup>().ToArray();
+        if (studyGroups.Length >= 3)
+        foreach (bool dark in new[] { false, true })
+        {
+            Palette.SetBackdropDark(dark); quick.SetWindows(studyGroups); root = (FrameworkElement)quick.Content;
+            Render(root, (int)quick.Width, (int)quick.Height);
+            quick.SpatialView!.FocusRow(Button(root, studyGroups[2].Name), false);
+            quick.SpatialView.HoldMenu(true);
+            var panelImage = Render(root, (int)quick.Width, (int)quick.Height);
+            var wingImage = RenderMenu(quick.CreateMenu());
+            var image = new DrawingVisual();
+            using (var dc = image.RenderOpen())
+            {
+                dc.DrawRectangle(new SolidColorBrush(dark ? Color.FromRgb(24, 26, 29) : Color.FromRgb(250, 250, 248)), null, new Rect(0, 0, 452, 360));
+                dc.PushClip(new RectangleGeometry(new Rect(0, 0, 452, 360)));
+                dc.DrawImage(panelImage, new Rect(4, 8, panelImage.Width, panelImage.Height));
+                dc.DrawImage(wingImage, new Rect(248, 8 + quick.SpatialView.MenuAnchor.TransformToAncestor(root).Transform(new Point()).Y - 32, wingImage.Width, wingImage.Height)); dc.Pop();
+            }
+            var bitmap = new RenderTargetBitmap(452, 360, 96, 96, PixelFormats.Pbgra32); bitmap.Render(image);
+            Save(bitmap, "particle-fidelity" + (dark ? "-dark.png" : "-light.png"));
+        }
+        ParticleMotionPreview.Write(groups, apps, Output);
+        string referenceFile = Path.Combine(Environment.CurrentDirectory, "output/design-concepts/2026-10-20-particle/虚幻粒子-形态预览.png");
+        if (File.Exists(referenceFile) && File.Exists(Path.Combine(Output, "particle-fidelity-light.png")))
+        {
+            BitmapImage Read(string path) { var image = new BitmapImage(); image.BeginInit(); image.CacheOption = BitmapCacheOption.OnLoad; image.UriSource = new Uri(path); image.EndInit(); image.Freeze(); return image; }
+            var reference = Read(referenceFile); int third = reference.PixelWidth / 3;
+            var referenceCrop = new CroppedBitmap(reference, new Int32Rect(third * 2, 0, reference.PixelWidth - third * 2, reference.PixelHeight));
+            var actual = Read(Path.Combine(Output, "particle-fidelity-light.png"));
+            var board = new DrawingVisual();
+            using (var dc = board.RenderOpen())
+            {
+                dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, 1040, 780));
+                void Title(string label, double x) => dc.DrawText(new FormattedText(label, System.Globalization.CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, new Typeface(Palette.BrandFont, FontStyles.Normal, FontWeights.Medium, FontStretches.Normal), 18, Palette.B("#303638"), 1), new Point(x, 22));
+                Title("概念参考", 24); Title("实际控件 · 原生尺寸", 552);
+                dc.DrawImage(referenceCrop, new Rect(20, 75, referenceCrop.PixelWidth * .8, referenceCrop.PixelHeight * .8));
+                dc.DrawImage(actual, new Rect(550, 160, actual.PixelWidth, actual.PixelHeight));
+            }
+            var bitmap = new RenderTargetBitmap(1040, 780, 96, 96, PixelFormats.Pbgra32); bitmap.Render(board); Save(bitmap, "particle-reference-comparison.png");
+        }
+        Palette.SetBackdropDark(false); quick.SetWindows(groups);
+        Palette.Apply("typefield"); root = (FrameworkElement)quick.Content;
+        if (quick.CreateMenu().Items.OfType<MenuItem>().Any(item => item.Header as string == "样式")) throw new Exception("Single-style menu must not offer a style picker");
         Palette.SetTheme(false);
-        quick.Width = 390; quick.Height = 430; quick.SetWindows(groups); root = (FrameworkElement)quick.Content;
-        Save(Render(root, 390, 430), "pixel-compact.png");
-        foreach (string name in new[] { "窗口", "最近", "常用", "选择主题", "专注模式", "关闭", "轮盘", "截图", "管理" })
+        quick.SetWindows(groups); root = (FrameworkElement)quick.Content;
+        Save(Render(root, (int)quick.Width, (int)quick.Height), "pixel-compact.png");
+        foreach (string name in new[] { "更多" })
         {
             var button = Button(root, name); var bounds = button.TransformToAncestor(root).TransformBounds(new Rect(button.RenderSize));
-            if (bounds.Left < 0 || bounds.Right > 390) throw new Exception("Compact toolbar extends beyond screen: " + name);
+            if (bounds.Left < 0 || bounds.Right > quick.Width) throw new Exception("Compact toolbar extends beyond screen: " + name);
         }
 
         var main = new MainWindow(new Preferences());
         ((ListBox)main.FindName("ResultsList")).ItemsSource = apps; ((ListBox)main.FindName("ResultsList")).Tag = "frequent";
-        Save(Render((FrameworkElement)main.Content, 1040, 740), "pixel-manager-light.png");
+        Save(Render((FrameworkElement)main.Content, 1040, 740), "manager-typefield.png");
         ((Grid)main.FindName("AssistantPanel")).Visibility = Visibility.Collapsed; ((Grid)main.FindName("SettingsPanel")).Visibility = Visibility.Visible;
-        Save(Render((FrameworkElement)main.Content, 1040, 740), "pixel-settings-light.png");
-        Palette.SetTheme(true); ((OrbitVisual)main.FindName("Preview")).InvalidateVisual(); Save(Render((FrameworkElement)main.Content, 1040, 740), "pixel-settings-dark.png");
+        Save(Render((FrameworkElement)main.Content, 1040, 740), "settings-typefield.png");
+        Save(Render((FrameworkElement)main.Content, 940, 650), "settings-minimum.png");
+        foreach (var combo in Descendants<ComboBox>((DependencyObject)main.Content))
+        {
+            if (combo.Visibility != Visibility.Visible || combo.ActualWidth == 0) continue;
+            var bounds = combo.TransformToAncestor((Visual)main.Content).TransformBounds(new Rect(combo.RenderSize));
+            if (bounds.Left < 0 || bounds.Right > 940) throw new Exception("Setting field extends beyond minimum window width");
+        }
+        Palette.SetTheme(true); ((OrbitVisual)main.FindName("Preview")).InvalidateVisual(); Save(Render((FrameworkElement)main.Content, 1040, 740), "settings-typefield-dark.png");
         Palette.SetTheme(false);
         var screenshot = SampleWindow(2);
         var capture = new CaptureOverlay(screenshot, new System.Drawing.Rectangle(0, 0, 480, 280));
@@ -192,6 +297,6 @@ internal static class OffscreenPreview
             throw new Exception("Window target identity/focus guard failed");
         hidden.Dispose(); if (target.Valid) throw new Exception("Closed target must be rejected");
         capture.Close(); main.Close(); quick.Close();
-        Console.WriteLine("PASS: grouped window UI, thumbnails, light/dark, native icons, recent/frequent removal, wheel entry, scaled capture; offscreen renders saved to " + Output);
+        Console.WriteLine("PASS: compact icon rail, light/dark, native icons, recent/frequent removal, mouse menu, scaled capture; offscreen renders saved to " + Output);
     }
 }

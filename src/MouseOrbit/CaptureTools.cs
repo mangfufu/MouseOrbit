@@ -96,7 +96,7 @@ internal sealed class CaptureOverlay : Window
         _surface = new CaptureSurface(screen); Content = _surface;
         InitialCancel();
         _surface.RegionSelected += Selection;
-        Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("/MouseOrbit;component/Controls.xaml", UriKind.Relative) }); Palette.Resources(Resources);
+        Ui.Install(this);
         SourceInitialized += (_, _) =>
         {
             var hwnd = new WindowInteropHelper(this).Handle;
@@ -114,13 +114,15 @@ internal sealed class CaptureOverlay : Window
     {
         _surface.Children.Clear();
         var cancel = Tool("取消", () => Finished?.Invoke());
-        cancel.Background = Palette.Paper;
+        cancel.Background = Palette.Surface;
         _surface.Children.Add(cancel);
         Canvas.SetLeft(cancel, Math.Max(8, Width - 80)); Canvas.SetTop(cancel, 16);
     }
     private Button Tool(string label, Action action)
     {
-        var button = Palette.Button(label, action, label); button.Padding = new Thickness(9, 8, 9, 8); button.Margin = new Thickness(1); button.FontSize = 12; return button;
+        var icon = label switch { "矩形" => "rectangle", "圆形" => "ellipse", "箭头" => "arrow", "画笔" => "pen", "文字" => "text", "贴字" => "paste", "撤销" => "undo", "重做" => "redo", "重选" => "screenshot", "复制" => "copy", "保存" => "save", "GIF" => "record", _ => "close" };
+        var button = label is "×" or "取消" ? Ui.Icon(icon, action, label) : Ui.Action(icon, label, action);
+        button.Padding = new Thickness(8); button.Margin = new Thickness(2); button.FontSize = 12; return button;
     }
     private void Selection()
     {
@@ -130,15 +132,14 @@ internal sealed class CaptureOverlay : Window
         {
             var button = Tool(label, () => SelectTool(id)); _tools[id] = button; _toolbar.Children.Add(button);
         }
-        foreach (var hex in new[] { "#E75B3D", "#E8B63A", "#39AE77", "#428BDC", "#222222", "#FFFFFF" })
+        foreach (var color in Ui.AnnotationColors)
         {
-            var color = (Color)ColorConverter.ConvertFromString(hex);
-            var button = Palette.Button(new Border { Width = 15, Height = 15, Background = new SolidColorBrush(color), BorderBrush = Palette.Muted, BorderThickness = new Thickness(.5) }, () => _surface.Ink = color, "标注颜色");
+            var button = Palette.Button(new Border { Width = 14, Height = 14, CornerRadius = new CornerRadius(7), Background = new SolidColorBrush(color), BorderBrush = Palette.Edge, BorderThickness = new Thickness(.5) }, () => _surface.Ink = color, "标注颜色");
             button.Padding = new Thickness(4); button.VerticalAlignment = VerticalAlignment.Center; _toolbar.Children.Add(button);
         }
-        var width = new ComboBox { ItemsSource = new double[] { 2, 3, 5, 8, 12 }, SelectedIndex = 1, Width = 48, Margin = new Thickness(4), ToolTip = "线条粗细" };
+        var width = new ComboBox { ItemsSource = Ui.LineWidths, SelectedIndex = 1, Width = 56, Margin = new Thickness(4), ToolTip = "线条粗细" };
         width.SelectionChanged += (_, _) => _surface.LineWidth = (double)width.SelectedItem; _toolbar.Children.Add(width);
-        var font = new ComboBox { ItemsSource = new double[] { 12, 16, 20, 24, 32, 40, 56 }, SelectedIndex = 3, Width = 64, Margin = new Thickness(4), ToolTip = "文字大小" };
+        var font = new ComboBox { ItemsSource = Ui.FontSizes, SelectedIndex = 3, Width = 64, Margin = new Thickness(4), ToolTip = "文字大小" };
         font.SelectionChanged += (_, _) => _surface.FontSize = (double)font.SelectedItem; _toolbar.Children.Add(font);
         _toolbar.Children.Add(Tool("贴字", () => { try { SelectTool("text"); _surface.InsertClipboardText(); } catch (ExternalException) { _message.Text = "剪贴板暂不可用"; } }));
         _toolbar.Children.Add(Tool("撤销", () => { _surface.CommitText(); _surface.Document?.Undo(); _surface.InvalidateVisual(); }));
@@ -149,7 +150,7 @@ internal sealed class CaptureOverlay : Window
         _toolbar.Children.Add(Tool("GIF", StartGif));
         _toolbar.Children.Add(Tool("×", () => Finished?.Invoke()));
         _toolbar.Children.Add(_message);
-        var border = new Border { Background = Palette.Paper, BorderBrush = Palette.Edge, BorderThickness = new Thickness(1), Padding = new Thickness(3), Child = _toolbar, Cursor = Cursors.Arrow };
+        var border = Ui.Shell(_toolbar, new Thickness(7), 16); border.Cursor = Cursors.Arrow;
         _surface.Children.Clear(); _surface.Children.Add(border);
         double max = Math.Min(970, Width - 12); _toolbar.MaxWidth = Math.Max(150, max - 8);
         border.Measure(new Size(max, double.PositiveInfinity));

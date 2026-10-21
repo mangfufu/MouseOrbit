@@ -13,11 +13,17 @@ namespace MouseOrbit;
 
 public sealed class EntryIcon : Image
 {
+    private static readonly DependencyProperty ToneProperty = DependencyProperty.Register("Tone", typeof(Color), typeof(EntryIcon), new PropertyMetadata(Colors.Transparent, (sender, _) =>
+    {
+        var image = (EntryIcon)sender;
+        if (image.Entry?.Kind == "command") image.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.DataBind, new Action(image.RefreshCommand));
+    }));
     public static readonly DependencyProperty EntryProperty = DependencyProperty.Register(nameof(Entry), typeof(DesktopEntry), typeof(EntryIcon), new PropertyMetadata(null, Changed));
     public DesktopEntry? Entry { get => (DesktopEntry?)GetValue(EntryProperty); set => SetValue(EntryProperty, value); }
     public EntryIcon()
     {
         Stretch = Stretch.Uniform; RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.HighQuality);
+        System.Windows.Data.BindingOperations.SetBinding(this, ToneProperty, new System.Windows.Data.Binding(nameof(SolidColorBrush.Color)) { Source = Palette.Ink });
         Loaded += (_, _) => Palette.Changed += RefreshCommand;
         Unloaded += (_, _) => Palette.Changed -= RefreshCommand;
     }

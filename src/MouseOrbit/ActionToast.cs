@@ -14,13 +14,13 @@ internal sealed class ActionToast : Window, IDisposable
         Title = "MouseOrbit · 操作提示"; Width = 174; Height = 40;
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize; AllowsTransparency = true;
         ShowActivated = false; ShowInTaskbar = false; Topmost = true; Background = Brushes.Transparent;
-        Content = new Border { Background = Palette.Surface, BorderBrush = Palette.Edge, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(12, 5, 12, 5), Child = _text };
+        Ui.Install(this); Content = Ui.Shell(_text, new Thickness(12, 5, 12, 5), 12);
         SourceInitialized += (_, _) => Native.OverlayStyle(this, true);
         _timer.Tick += (_, _) => { _timer.Stop(); Hide(); };
     }
     internal void NotifyPinned(bool pinned, Native.Point point)
     {
-        _timer.Stop(); _text.Text = pinned ? "● 已置顶" : "○ 已取消置顶";
+        _timer.Stop(); _text.Text = pinned ? "已置顶" : "已取消置顶";
         Native.Position(this, point.X + 18, point.Y + 20);
         double dpi = Math.Max(1, Native.GetDpiForWindow(new WindowInteropHelper(this).Handle) / 96d);
         var area = System.Windows.Forms.Screen.FromPoint(new System.Drawing.Point(point.X, point.Y)).WorkingArea;

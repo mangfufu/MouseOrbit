@@ -149,6 +149,8 @@ public sealed class Preferences
             throw new InvalidDataException("配置内容不完整");
         settings.Sensitivity = double.IsFinite(settings.Sensitivity) ? Math.Clamp(settings.Sensitivity, 16, 70) : 30;
         if (settings.Trigger is not ("XButton1" or "XButton2" or "Middle")) settings.Trigger = "XButton1";
+        var appearance = ThemePresets.Find(settings.Theme, settings.DarkTheme);
+        settings.Theme = appearance.Id; settings.DarkTheme = appearance.Dark;
         return settings;
     }
     public void Save()
